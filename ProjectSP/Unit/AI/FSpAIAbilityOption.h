@@ -16,6 +16,4 @@ struct FSpAIAbilityOption
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "MJ - Setting", meta = (AllowPrivateAccess = "true"))
 	FGameplayTag AbilityTag;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "MJ - Setting", meta = (AllowPrivateAccess = "true"))
-	float ExecuteRange = 500.0f;
 };

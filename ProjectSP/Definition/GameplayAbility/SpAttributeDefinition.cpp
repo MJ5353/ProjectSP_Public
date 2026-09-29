@@ -1,6 +1,6 @@
 #include "SpAttributeDefinition.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
-#include "ProjectSP/Ability/SpGrantedAttributeSets.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
+#include "ProjectSP/Ability/Core/SpGrantedAttributeSets.h"
 #include "ProjectSP/Attribute/SpAttributeSet.h"
 
 // ==================================================
@@ -33,6 +33,24 @@ void USpAttributeDefinition::GiveToAbilitySystem(USpAbilitySystemComponent* ASC,
 		if (!ASC->GetAttributeSet(AttributeSetClass))
 			continue;
 
+		ASC->SetNumericAttributeBase(InitialValue.Attribute, InitialValue.Value);
+	}
+}
+
+void USpAttributeDefinition::ResetAttributes(USpAbilitySystemComponent* ASC) const
+{
+	if (!ASC || !ASC->IsOwnerActorAuthoritative())
+		return;
+	
+	for (const FSpAttributeInitValue& InitialValue : AttributeInitialValues)
+	{
+		if (!InitialValue.Attribute.IsValid())
+			continue;
+
+		const TSubclassOf<UAttributeSet> AttributeSetClass = InitialValue.Attribute.GetAttributeSetClass();
+		if (!ASC->GetAttributeSet(AttributeSetClass))
+			continue;
+		
 		ASC->SetNumericAttributeBase(InitialValue.Attribute, InitialValue.Value);
 	}
 }

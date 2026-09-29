@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "Engine/DataTable.h"
+#include "GameplayTagContainer.h"
 #include "ProjectSP/Definition/GameplayAbility/SpAttributeDefinition.h"
 #include "ProjectSP/Definition/GameplayAbility/SpAbilityDefinition.h"
 #include "SpUnitDefinition.generated.h"
@@ -12,18 +13,11 @@ class UBehaviorTree;
 class ASpUnit;
 class USpCameraDefinition;
 class USpAbilityDefinition;
+class USpAbilityExtensionDefinition;
+class USpSkillDisplayDefinition;
 class USpInputDefinition;
 struct FSpAttributeInitValue;
 struct FSpInputMappingContext;
-
-// ==================================================
-
-UENUM(BlueprintType)
-enum class EUnitDeadProcess : uint8
-{
-	Remove,
-	Resurrect,
-};
 
 // ==================================================
 
@@ -50,6 +44,15 @@ public:
 	
 	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
 	TArray<TObjectPtr<USpAbilityDefinition>> AbilityDefinitions;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="MJ - Setting")
+	TObjectPtr<USpSkillDisplayDefinition> SkillDisplayDefinition;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="MJ - Setting")
+	TObjectPtr<USpAbilityExtensionDefinition> AbilityExtensionDefinition;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="MJ - Setting")
+	TArray<FGameplayTag> InitiallyEquippedExtensions;
 	
 	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
 	TObjectPtr<USpAttributeDefinition> AttributeDefinition;
@@ -57,9 +60,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
 	TObjectPtr<USpAIDefinition> AIDefinition;
 	
-	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting|Death")
-	EUnitDeadProcess DeadProcess = EUnitDeadProcess::Remove;
-
 	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting|Death", meta=(ClampMin="0.0", UIMin="0.0"))
 	float DeadProcessTime = 0.0f;
+
+#if WITH_EDITOR
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+#endif
 };

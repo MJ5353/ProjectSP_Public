@@ -1,51 +1,42 @@
 #include "SpGameplayTags.h"
-#include "GameplayTagsManager.h"
 
 // ==================================================
 
-// static 구현!
-FSpGameplayTags FSpGameplayTags::GameplayTags;
-
-FSpGameplayTags::FSpGameplayTags()
+namespace SpGameplayTags
 {
-}
-
-FSpGameplayTags::~FSpGameplayTags()
-{
-}
-
-void FSpGameplayTags::InitializeNativeTags()
-{
-	UGameplayTagsManager& Manager = UGameplayTagsManager::Get();
-	GameplayTags.AddAllTags(Manager);
-}
-
-void FSpGameplayTags::AddTag(FGameplayTag& OutTag, const ANSICHAR* TagName, const ANSICHAR* TagComment)
-{
-	FString Comment = FString(TEXT("(Native) ")) + FString(TagComment);
-	OutTag = UGameplayTagsManager::Get().AddNativeGameplayTag(FName(TagName), Comment);
-}
-
-void FSpGameplayTags::AddAllTags(UGameplayTagsManager& Manager)
-{
-	// ability
-	AddTag(AbilitySlotTag_BasicAttack, "GameplayAbility.AbilitySlot.BasicAttack", "");
-	AddTag(AbilitySlotTag_Secondary, "GameplayAbility.AbilitySlot.Secondary", "");
-	AddTag(AbilityConditionTag_NeedTarget, "GameplayAbility.Condition.NeedTarget", "");
+	// ability key
+	UE_DEFINE_GAMEPLAY_TAG(AbilityKeyTag, "GameplayAbility.Key");
 	
-	// state
-	AddTag(StateTag, "Unit.State", "");
-	AddTag(StateTag_Select, "Unit.State.Select", "");
-	AddTag(StateTag_Dead, "Unit.State.Dead", "");
-	AddTag(StateTag_Respawn, "Unit.State.Respawn", "");
+	// ability target
+	UE_DEFINE_GAMEPLAY_TAG(AbilityTargetTag_None, "GameplayAbility.Target.None");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityTargetTag_Self, "GameplayAbility.Target.Self");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityTargetTag_Hostile, "GameplayAbility.Target.Hostile");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityTargetTag_Location, "GameplayAbility.Target.Location");
 
-	// battle flag
-	AddTag(BattleFlagTag_Targetable, "Unit.BattleFlag.Targetable", "");
+	// ability condition
+	UE_DEFINE_GAMEPLAY_TAG(AbilityConditionTag_TargetFacing, "GameplayAbility.Condition.TargetFacing");
 
-	// input
-	AddTag(InputTag_PrimaryClick, "Input.Click.Primary", "");
-	AddTag(InputTag_PrimaryClick_Reserve, "Input.Click.Primary.Reserve", "");
-	AddTag(InputTag_SecondaryClick, "Input.Click.Secondary", "");
-	AddTag(InputTag_Move_WASD, "Input.Move.WASD", "");
-	AddTag(InputTag_Look_Mouse, "Input.Look.Mouse", "");
+	// ability behavior
+	UE_DEFINE_GAMEPLAY_TAG(AbilityBehaviorTag_Persist, "GameplayAbility.Behavior.Persist");
+	
+	// ability modifier scope
+	UE_DEFINE_GAMEPLAY_TAG(AbilityModifierScopeTag_OncePerActivation, "GameplayAbility.Modifier.Scope.OncePerActivation");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityModifierScopeTag_OncePerTargetPerActivation, "GameplayAbility.Modifier.Scope.OncePerTargetPerActivation");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityModifierScopeTag_PerHit, "GameplayAbility.Modifier.Scope.PerHit");
+
+	// effect behavior
+	UE_DEFINE_GAMEPLAY_TAG(EffectBehaviorTag_Persist, "GameplayEffect.Behavior.Persist");
+	UE_DEFINE_GAMEPLAY_TAG(EffectBehaviorTag_NoInstigator, "GameplayEffect.Behavior.NoInstigator");
+
+	// unit flag
+	UE_DEFINE_GAMEPLAY_TAG(UnitFlagTag_Targetable, "Unit.BattleFlag.Targetable");
+	
+	// unit state
+	UE_DEFINE_GAMEPLAY_TAG(UnitStateTag, "Unit.State");
+	UE_DEFINE_GAMEPLAY_TAG(UnitStateTag_Select, "Unit.State.Select");
+	UE_DEFINE_GAMEPLAY_TAG(UnitStateTag_Dead, "Unit.State.Dead");
+	UE_DEFINE_GAMEPLAY_TAG(UnitStateTag_Respawn, "Unit.State.Respawn");
+
+	// unit reaction
+	UE_DEFINE_GAMEPLAY_TAG(UnitReactionTag_Hit, "Unit.Reaction.Hit");
 }

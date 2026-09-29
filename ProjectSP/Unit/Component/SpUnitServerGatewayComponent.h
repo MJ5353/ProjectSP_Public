@@ -18,15 +18,16 @@ class PROJECTSP_API USpUnitServerGatewayComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
-	void PrepareUnit_ServerOnly(const FSpUnitData& UnitData);
-	void ActivateUnit_ServerOnly();
-	void ReturnUnit_ServerOnly();
+	void ApplyUnitData_Server(const FSpUnitData& UnitData) const;
+	void PrepareUnit_Server() const;
+	void ActivateUnit_Server();
+	void ReturnUnit_Server();
 
 private:
 	// notify
-	void NotifyPrepared_ServerOnly(const FSpUnitData& UnitData) const;
-	void NotifyActivated_ServerOnly(const FSpUnitData& UnitData) const;
-	void NotifyReturned_ServerOnly() const;
+	void NotifyPrepared_Server() const;
+	void NotifyActivated_Server(const FSpUnitData& UnitData) const;
+	void NotifyReturned_Server() const;
 
 	// get
 	ASpUnit* GetOwnerUnitChecked() const;

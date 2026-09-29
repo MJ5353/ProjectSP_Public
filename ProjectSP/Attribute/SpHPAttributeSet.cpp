@@ -1,7 +1,7 @@
 #include "SpHPAttributeSet.h"
 #include "GameplayEffectExtension.h"
 #include "Net/UnrealNetwork.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
 #include "ProjectSP/GameFramework/SpGameplayTags.h"
 
 // ==================================================
@@ -36,7 +36,12 @@ void USpHPAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallba
 			SetAndCheckCurrentHp(NewHP);
 
 			if (USpAbilitySystemComponent* SpASC = Cast<USpAbilitySystemComponent>(GetOwningAbilitySystemComponent()))
-				SpASC->NotifyDamageApplied(Data.EffectSpec.GetEffectContext().GetOriginalInstigator(), AppliedDamage);
+			{
+				const bool bNoDamageInstigator = Data.EffectSpec.GetDynamicAssetTags().HasTagExact(SpGameplayTags::EffectBehaviorTag_NoInstigator);
+				AActor* DamageInstigator = bNoDamageInstigator ? nullptr : Data.EffectSpec.GetEffectContext().GetOriginalInstigator();
+				
+				SpASC->NotifyDamageApplied(DamageInstigator, AppliedDamage);
+			}
 		}
 	}
 	else if (ModifiedAttribute == GetCurrentHPAttribute())
@@ -76,7 +81,7 @@ void USpHPAttributeSet::OnDead()
 	if (!ASC)
 		return;
 
-	FGameplayTag Tag = FSpGameplayTags::Get().StateTag_Dead;
+	FGameplayTag Tag = SpGameplayTags::UnitStateTag_Dead;
 	ASC->SetLooseGameplayTagCount(Tag, 1, EGameplayTagReplicationState::TagOnly);
 }
 

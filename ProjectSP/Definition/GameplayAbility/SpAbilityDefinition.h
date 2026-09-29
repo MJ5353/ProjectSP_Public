@@ -12,30 +12,16 @@ class USpGameplayAbility;
 
 // ==================================================
 
-USTRUCT(BlueprintType)
-struct FSpAbilityTagPairData
-{
-	GENERATED_BODY()
-	
-	UPROPERTY(EditDefaultsOnly)
-	TSubclassOf<USpGameplayAbility> Ability = nullptr;
-	
-	UPROPERTY(EditDefaultsOnly)
-	FGameplayTag Tag;
-};
-
-// ==================================================
-
 UCLASS()
 class PROJECTSP_API USpAbilityDefinition : public UPrimaryDataAsset
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
-	TArray<FSpAbilityTagPairData> AbilityTagPairs;
+public:
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "MJ | Setting")
+	TMap<FGameplayTag, TSubclassOf<USpGameplayAbility>> AbilityMap;
 	
 	// ------------------------------------------------
 	
-public:
 	void GiveToAbilitySystem(USpAbilitySystemComponent* ASC, FSpGrantedAbilityHandles* OutGrantedHandles, UObject* SourceObject = nullptr) const;
 };

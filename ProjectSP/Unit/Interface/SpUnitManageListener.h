@@ -22,5 +22,6 @@ public:
 	virtual void OnInitUnit() {}
 	virtual void OnClearUnit() {}
 	virtual void OnUnitActive(bool bActive) {}
+	virtual void OnUnitPlayable(bool bPlayable) {}
 	virtual void OnUnitStateChanged(FGameplayTag StateTag, bool bAdded) {}
 };

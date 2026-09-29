@@ -1,6 +1,7 @@
 #include "SpBTTask_TryActivateAnyAbility.h"
 #include "BehaviorTree/BlackboardComponent.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
+#include "ProjectSP/GameFramework/SpGameplayTags.h"
 #include "ProjectSP/Unit/SpUnit.h"
 #include "ProjectSP/Unit/AI/SpEnemyAIController.h"
 
@@ -11,28 +12,21 @@ USpBTTask_TryActivateAnyAbility::USpBTTask_TryActivateAnyAbility()
 	NodeName = TEXT("Try Activate Any Ability");
 }
 
-bool USpBTTask_TryActivateAnyAbility::CheckTargetCondition(const UBlackboardComponent* BlackboardComponent, const ASpUnit* OwnerUnit, const float ExecuteRange)
+bool USpBTTask_TryActivateAnyAbility::CheckTargetCondition(const ASpUnit* OwnerUnit, const float AllowedRange, const bool bNeedTargetFacing)
 {
-	AActor* TargetActor = Cast<AActor>(BlackboardComponent->GetValueAsObject(SpEnemyAI::BlackboardKeys::TargetActor));
-	if (!IsValid(TargetActor))
+	const ASpUnit* TargetActor = OwnerUnit->GetTargetActor();
+	if (!OwnerUnit->IsAttackable(TargetActor))
 		return false;
 
 	FVector ToTarget = TargetActor->GetActorLocation() - OwnerUnit->GetActorLocation();
 	ToTarget.Z = 0.0f;
 
-	if (!ToTarget.IsNearlyZero())
-	{
-		const float TargetYaw = ToTarget.Rotation().Yaw;
-		const float CurrentYaw = OwnerUnit->GetActorRotation().Yaw;
-		const float YawDifference = FMath::Abs(FMath::FindDeltaAngleDegrees(CurrentYaw, TargetYaw));
-			
-		if (YawDifference > SpEnemyAI::Define::FacingToleranceDegrees)
-			return false;
-	}
+	if (bNeedTargetFacing && !OwnerUnit->IsFacingTargetLocation(TargetActor->GetActorLocation()))
+		return false;
 
-	float ExecuteRangeSq = FMath::Square(ExecuteRange + 100.f);
+	// check dist
+	float ExecuteRangeSq = FMath::Square(AllowedRange);
 	float DistanceSq = ToTarget.SizeSquared2D();
-		
 	return ExecuteRangeSq >= DistanceSq;
 }
 
@@ -58,12 +52,15 @@ EBTNodeResult::Type USpBTTask_TryActivateAnyAbility::ExecuteTask(UBehaviorTreeCo
 	bool bNeedTarget;
 	float ExecuteRange;
 	
-	if (!EnemyController->TryGetActivatableAbility(AbilityTag, bNeedTarget, ExecuteRange))
+	const bool bFoundAbility = EnemyController->TryGetActivatableAbility(AbilityTag, bNeedTarget, ExecuteRange);
+	const float AllowedRange = bNeedTarget ? ExecuteRange + SpEnemyAI::Define::TargetRangeTolerance : ExecuteRange;
+	BlackboardComponent->SetValueAsFloat(SpEnemyAI::BlackboardKeys::TargetFacingRange, AllowedRange);
+	
+	if (!bFoundAbility)
 		return EBTNodeResult::Failed;
 	
-	BlackboardComponent->SetValueAsFloat(SpEnemyAI::BlackboardKeys::TargetFacingRange, ExecuteRange);
-	
-	if (bNeedTarget && !CheckTargetCondition(BlackboardComponent, OwnerUnit, ExecuteRange))
+	const bool bNeedTargetFacing = SpASC->HasAbilityAssetTag(AbilityTag, SpGameplayTags::AbilityConditionTag_TargetFacing);
+	if (bNeedTarget && !CheckTargetCondition(OwnerUnit, AllowedRange, bNeedTargetFacing))
 		return EBTNodeResult::Failed;
 	
 	if (!SpASC->TryActivateAbilityByTag(AbilityTag))

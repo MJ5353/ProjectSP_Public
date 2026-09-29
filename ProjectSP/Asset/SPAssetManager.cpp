@@ -1,13 +1,6 @@
 #include "SPAssetManager.h"
-#include "ProjectSP/GameFramework/SpGameplayTags.h"
 
 // ==================================================
-
-void USPAssetManager::StartInitialLoading()
-{
-	Super::StartInitialLoading();
-	FSpGameplayTags::InitializeNativeTags();
-}
 
 USPAssetManager& USPAssetManager::Get()
 {

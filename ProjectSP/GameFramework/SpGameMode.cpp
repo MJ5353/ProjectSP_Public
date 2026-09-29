@@ -1,104 +1,102 @@
 #include "SpGameMode.h"
-#include "SpGameState.h"
 #include "SpPlayerController.h"
 #include "SpPlayerState.h"
-#include "ProjectSP/Common/SpLog.h"
+#include "Engine/World.h"
 #include "ProjectSP/Definition/Unit/SpUnitDefinition.h"
-#include "ProjectSP/Unit/SpUnit.h"
+#include "ProjectSP/GameFramework/GameState/SpGamePhaseState.h"
+#include "ProjectSP/GameFramework/GameState/SpGamePhaseLobbyState.h"
 #include "ProjectSP/Subsystem/SpawnSubsystem.h"
+#include "ProjectSP/Unit/SpPlayerUnit.h"
 #include "ProjectSP/Unit/Define/SpTeam.h"
 
 // ==================================================
 
-ASpGameMode::ASpGameMode()
+ASpGameMode::ASpGameMode() : PhaseMachine(Phase)
 {
 	GameStateClass = ASpGameState::StaticClass();
+	PrimaryActorTick.bCanEverTick = true;
+}
+
+void ASpGameMode::InitGameState()
+{
+	Super::InitGameState();
+
+	if (ensure(GetGameState<ASpGameState>()))
+		PhaseMachine.Begin<FSpGamePhaseLobbyState>(*this);
 }
 
 void ASpGameMode::StartPlay()
 {
 	Super::StartPlay();
 
-	// 맵 세팅
-	PrepareMapUnits_Server();
+	if (FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>())
+		State->StartPlay();
+}
 
-	// 입장 대기
-	if (ASpGameState* SpGameState = GetSpGameState())
-		SpGameState->SetGamePhase_Server(ESpGamePhase::WaitingForPlayers);
+void ASpGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	PhaseMachine.End();
+	Super::EndPlay(EndPlayReason);
+}
+
+void ASpGameMode::Tick(const float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>())
+	{
+		// 상태의 처리가 반환된 뒤 교체한다. 콜백 실행 중 상태 객체를 파괴하지 않는다.
+		if (TUniquePtr<ISpState<ESpGamePhase>> NextState = State->Update())
+			PhaseMachine.TryChangeState(MoveTemp(NextState));
+	}
 }
 
 void ASpGameMode::Logout(AController* Exiting)
 {
-	if (ASpPlayerController* PlayerController = Cast<ASpPlayerController>(Exiting))
-	{
-		InitialPlayers.Remove(PlayerController);
-		ReadyInitialPlayers.Remove(PlayerController);
-		RemoveConnectedPlayer_Server(PlayerController);
-	}
+	FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>();
+	ASpPlayerController* PlayerController = Cast<ASpPlayerController>(Exiting);
+	
+	if (State && PlayerController)
+		State->BeforePlayerLogout(*PlayerController);
 
 	Super::Logout(Exiting);
 
-	if (ConnectedPlayers.IsEmpty())
-	{
-		ResetRoomWhenEmpty_Server();
-		return;
-	}
-
-	// 방장이 나가면 방장 갱신
-	RefreshRoomHost_Server();
-
-	if (bInitialPresentationSealed && !bInitialPresentationComplete)
-		TryCompleteInitialPresentation_Server();
-	else if (!bInitialPresentationSealed)
-		RefreshRoomStartAvailability_Server();
+	State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>();
+	if (State && PlayerController)
+		State->AfterPlayerLogout();
 }
 
-// override framework
+// override gameMode
 
 bool ASpGameMode::ReadyToStartMatch_Implementation()
 {
-	// 모든 player의 initial unit load가 끝나야 매치 시작
-	return bInitialPresentationComplete;
+	return PhaseMachine.IsActive() && Phase == ESpGamePhase::Playing;
 }
 
 void ASpGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
 {
+	FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>();
 	ASpPlayerController* PlayerController = Cast<ASpPlayerController>(NewPlayer);
-	if (!PlayerController)
+
+	if (!State || !PlayerController)
 	{
 		Super::HandleStartingNewPlayer_Implementation(NewPlayer);
 		return;
 	}
 
-	// Start 이후의 신규 접속 및 재접속은 게임에 합류시키지 않고 관전자로만 처리
-	if (bInitialPresentationSealed)
-	{
-		RegisterConnectedPlayer_Server(PlayerController);
-		NewPlayer->StartSpectatingOnly();
+	const bool bRunDefaultStart = State->BeforePlayerJoin(*PlayerController);
 
-		return;
-	}
+	if (bRunDefaultStart)
+		Super::HandleStartingNewPlayer_Implementation(NewPlayer);
 
-	// 모두가 나간 경우를 대비해서 호출
-	PrepareMapUnits_Server();
-	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
-
-	RegisterConnectedPlayer_Server(PlayerController);
-	if (ASpPlayerState* PlayerState = PlayerController->GetPlayerState<ASpPlayerState>())
-		PlayerState->SetReadyToStart_Server(false);
-
-	InitialPlayers.Add(PlayerController);
-	RegisterInitialUnit_Server(PlayerController->GetPawn<ASpUnit>());
-
-	// Start 전에는 현재 입장자가 다음 게임의 참여 후보가 된다.
-	RefreshRoomStartAvailability_Server();
+	State->HandlePlayerJoined(*PlayerController);
 }
 
 UClass* ASpGameMode::GetDefaultPawnClassForController_Implementation(AController* InController)
 {
 	if (const ASpPlayerState* PlayerState = InController->GetPlayerState<ASpPlayerState>())
 	{
-		if (USpUnitDefinition* UnitDefinition = PlayerState->UnitDefinition)
+		if (USpUnitDefinition* UnitDefinition = PlayerState->GetUnitDefinition())
 			return UnitDefinition->UnitClass;
 	}
 
@@ -110,6 +108,7 @@ APawn* ASpGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* NewP
 	FActorSpawnParameters SpawnInfo;
 	SpawnInfo.Instigator = GetInstigator();
 	SpawnInfo.ObjectFlags |= RF_Transient;
+	SpawnInfo.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
 	const ASpPlayerController* PlayerController = Cast<ASpPlayerController>(NewPlayer);
 	const ASpPlayerState* PlayerState = NewPlayer->GetPlayerState<ASpPlayerState>();
@@ -117,416 +116,112 @@ APawn* ASpGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* NewP
 	if (!PlayerController || !PlayerState)
 		return Super::SpawnDefaultPawnAtTransform_Implementation(NewPlayer, SpawnTransform);
 
-	if (USpUnitDefinition* UnitDefinition = PlayerState->UnitDefinition)
+	if (USpUnitDefinition* UnitDefinition = PlayerState->GetUnitDefinition())
 	{
-		if (USpawnSubsystem* UnitSpawnSubsystem = GetWorld()->GetSubsystem<USpawnSubsystem>())
+		if (USpawnSubsystem* SpawnSubsystem = GetWorld()->GetSubsystem<USpawnSubsystem>())
 		{
-			if (ASpUnit* SpawnedUnit = UnitSpawnSubsystem->SpawnUnit(UnitDefinition, SpawnTransform, SpawnInfo, FGenericTeamId(SpTeam::PlayerId), bInitialPresentationComplete))
-			{
-				// Initial Presentation 전에 확정된 참여자의 Pawn만 초기 대상에 등록한다.
-				if (!bInitialPresentationSealed && InitialPlayers.Contains(PlayerController))
-					RegisterInitialUnit_Server(SpawnedUnit);
+			bool bActivateImmediately = Phase == ESpGamePhase::Playing;
+			FGenericTeamId TeamID = FGenericTeamId(SpTeam::PlayerId);
 
-				return SpawnedUnit;
-			}
+			return SpawnSubsystem->SpawnPlayerUnit(UnitDefinition, SpawnTransform, SpawnInfo, TeamID, bActivateImmediately);
 		}
+		return nullptr;
 	}
-	
+
 	return Super::SpawnDefaultPawnAtTransform_Implementation(NewPlayer, SpawnTransform);
 }
 
-// callback
+// handle
 
 void ASpGameMode::HandlePlayerReadyChanged_Server(ASpPlayerController* PlayerController, const bool bReadyToStart)
 {
-	if (!PlayerController || bInitialPresentationSealed || !InitialPlayers.Contains(PlayerController))
-		return;
-
-	if (ASpPlayerState* PlayerState = PlayerController->GetPlayerState<ASpPlayerState>())
-		PlayerState->SetReadyToStart_Server(bReadyToStart);
-
-	RefreshRoomStartAvailability_Server();
+	FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>();
+	if (State && PlayerController)
+		State->HandlePlayerReadyChanged(*PlayerController, bReadyToStart);
 }
 
 void ASpGameMode::HandleRoomStartRequest_Server(ASpPlayerController* PlayerController)
 {
-	TryStartInitialPresentation_Server(PlayerController);
+	FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>();
+	if (State && PlayerController)
+		State->HandleStartRequested(*PlayerController);
 }
 
 void ASpGameMode::HandleInitialPresentationReady_Server(ASpPlayerController* PlayerController, const uint32 InInitialPresentationId)
 {
-	if (!PlayerController || 
-		!bInitialPresentationSealed || bInitialPresentationComplete || // 확정되지 않았거나 이미 완료된 경우
-		InInitialPresentationId != InitialPresentationId) // 식별자와 다른 경우
-		return;
-
-	// 기다릴 player가 아닌 경우
-	if (!InitialPlayers.Contains(PlayerController))
-		return;
-
-	// ready list에 담기
-	ReadyInitialPlayers.Add(PlayerController);
-
-	TryCompleteInitialPresentation_Server();
+	FSpGamePhaseState* State = PhaseMachine.GetActiveStateAs<FSpGamePhaseState>();
+	if (State && PlayerController)
+		State->HandlePresentationReady(*PlayerController, InInitialPresentationId);
 }
 
-// setting
-
-void ASpGameMode::PrepareMapUnits_Server()
+bool ASpGameMode::HandlePlayableUnitSelection_Server(ASpPlayerController* PlayerController, USpUnitDefinition* UnitDefinition)
 {
-	if (bMapUnitsPrepared)
-		return;
+	if (!HasAuthority() || !IsValid(PlayerController) || PlayerController->GetWorld() != GetWorld())
+		return false;
 
-	if (!ensureMsgf(MapDefinition, TEXT("Map Definition이 링크되지 않음")))
-		return;
+	ASpPlayerState* PlayerState = PlayerController->GetPlayerState<ASpPlayerState>();
+	const ASpGameState* SpGameState = GetGameState<ASpGameState>();
 
-	USpawnSubsystem* SpawnSubsystem = USpawnSubsystem::Get(GetWorld());
-	if (!SpawnSubsystem)
-		return;
+	if (!PlayerState || !SpGameState || !SpGameState->IsPlayableUnitDefinition(UnitDefinition))
+		return false;
 
-	TArray<ASpUnit*> SpawnedMapUnits;
-	SpawnSubsystem->SpawnMapUnits(MapDefinition, &SpawnedMapUnits, false);
+	if (Phase == ESpGamePhase::Lobby)
+	{
+		PlayerState->SetSelectedUnitDefinition_Server(UnitDefinition);
+		return true;
+	}
 
-	for (ASpUnit* Unit : SpawnedMapUnits)
-		RegisterInitialUnit_Server(Unit);
-
-	bMapUnitsPrepared = true;
-}
-
-void ASpGameMode::RegisterInitialUnit_Server(ASpUnit* Unit)
-{
-	if (!Unit)
-		return;
-
-	UE_LOG(LogMj, Log, TEXT("Register Unit: %s"), *Unit->GetName());
-	InitialUnits.AddUnique(Unit);
-}
-
-void ASpGameMode::RegisterConnectedPlayer_Server(ASpPlayerController* PlayerController)
-{
-	if (!PlayerController)
-		return;
-
-	ConnectedPlayers.AddUnique(PlayerController);
-	RefreshRoomHost_Server();
-}
-
-void ASpGameMode::SetRoomHost_Server(ASpPlayerController* PlayerController)
-{
-	if (!PlayerController)
-		return;
+	if (Phase != ESpGamePhase::Playing)
+		return false;
 	
-	RoomHostPlayer = PlayerController;
-
-	if (ASpGameState* SpGameState = GetSpGameState())
-	{
-		if (ASpPlayerState* SpPlayerState = PlayerController->GetPlayerState<ASpPlayerState>())
-			SpGameState->SetRoomHostPlayerState_Server(SpPlayerState);
-	}
+	return ReplacePlayableUnit_Server(*PlayerController, *PlayerState, UnitDefinition);
 }
 
-void ASpGameMode::RemoveConnectedPlayer_Server(ASpPlayerController* PlayerController)
+bool ASpGameMode::ReplacePlayableUnit_Server(ASpPlayerController& PlayerController, ASpPlayerState& PlayerState, USpUnitDefinition* UnitDefinition)
 {
-	ConnectedPlayers.RemoveAll([PlayerController](const TWeakObjectPtr<ASpPlayerController>& ConnectedPlayer)
+	ASpPlayerUnit* PreviousUnit = PlayerController.GetPawn<ASpPlayerUnit>();
+	if (!IsValid(PreviousUnit) || PreviousUnit->GetController() != &PlayerController || !PreviousUnit->HasValidUnitData())
+		return false;
+
+	if (PreviousUnit->GetUnitDefinition() == UnitDefinition)
 	{
-		return !ConnectedPlayer.IsValid() || ConnectedPlayer.Get() == PlayerController;
-	});
-}
-
-// refresh
-
-void ASpGameMode::RefreshRoomHost_Server()
-{
-	ConnectedPlayers.RemoveAll([](const TWeakObjectPtr<ASpPlayerController>& ConnectedPlayer)
-	{
-		return !ConnectedPlayer.IsValid();
-	});
-
-	const bool bCurrentHostConnected = ConnectedPlayers.ContainsByPredicate([this](const TWeakObjectPtr<ASpPlayerController>& ConnectedPlayer)
-	{
-		return ConnectedPlayer == RoomHostPlayer;
-	});
-
-	if (bCurrentHostConnected)
-		return;
-
-	ASpPlayerController* NextRoomHost = nullptr;
-	for (const TWeakObjectPtr<ASpPlayerController>& ConnectedPlayer : ConnectedPlayers)
-	{
-		if (ConnectedPlayer.IsValid())
-		{
-			NextRoomHost = ConnectedPlayer.Get();
-			break;
-		}
+		PlayerState.SetSelectedUnitDefinition_Server(UnitDefinition);
+		return true;
 	}
 
-	SetRoomHost_Server(NextRoomHost);
-}
+	USpawnSubsystem* SpawnSubsystem = GetWorld()->GetSubsystem<USpawnSubsystem>();
+	if (!SpawnSubsystem)
+		return false;
 
-void ASpGameMode::RefreshRoomStartAvailability_Server()
-{
-	ASpGameState* SpGameState = GetSpGameState();
-	if (!SpGameState)
-		return;
+	ASpPlayerUnit* NewUnit = SpawnReplacementUnit_Server(*SpawnSubsystem, *PreviousUnit, UnitDefinition);
+	if (!NewUnit)
+		return false;
 
-	const bool bCanStart = !bInitialPresentationSealed && !bInitialPresentationComplete && bMapUnitsPrepared && RoomHostPlayer.IsValid() && AreAllInitialPlayersReadyToStart_Server();
-
-	SpGameState->SetRoomStartAvailable_Server(bCanStart);
-}
-
-bool ASpGameMode::AreAllInitialPlayersReadyToStart_Server() const
-{
-	bool bHasInitialPlayer = false;
-
-	for (const TWeakObjectPtr<ASpPlayerController>& InitialPlayer : InitialPlayers)
+	PlayerController.Possess(NewUnit);
+	if (PlayerController.GetPawn() != NewUnit)
 	{
-		const ASpPlayerController* PlayerController = InitialPlayer.Get();
-		if (!PlayerController)
-			continue;
+		NewUnit->Destroy();
+		if (IsValid(PreviousUnit) && PlayerController.GetPawn() != PreviousUnit)
+			PlayerController.Possess(PreviousUnit);
 
-		bHasInitialPlayer = true;
-
-		const ASpPlayerState* PlayerState = PlayerController->GetPlayerState<ASpPlayerState>();
-		if (!PlayerState || !PlayerState->bReadyToStart)
-			return false;
+		return false;
 	}
 
-	return bHasInitialPlayer;
-}
-
-// presentation
-
-void ASpGameMode::TryStartInitialPresentation_Server(ASpPlayerController* RequestingPlayer)
-{
-	// 방장이 요청했을 경우에만 시작
-	if (!RequestingPlayer || RequestingPlayer != RoomHostPlayer)
-		return;
-
-	// 이미 presentation이 확정되었거나, 완료되었거나, 혹은 맵 유닛 세팅이 덜 되면 경우 return
-	if (bInitialPresentationSealed || bInitialPresentationComplete || !bMapUnitsPrepared)
-		return;
-
-	if (!AreAllInitialPlayersReadyToStart_Server())
-		return;
-
-	// WaitingToStart에서는 엔진이 Pawn을 만들지 않는다. sealed 전에 초기 참여자의
-	// Pawn/UnitData를 모두 준비해야 해당 UID가 InitialPresentation 목록에 포함된다.
-	if (!PrepareInitialPlayerUnits_Server())
-		return;
-
-	BeginInitialPresentation_Server();
-}
-
-bool ASpGameMode::PrepareInitialPlayerUnits_Server()
-{
-	for (const TWeakObjectPtr<ASpPlayerController>& InitialPlayer : InitialPlayers)
-	{
-		ASpPlayerController* PlayerController = InitialPlayer.Get();
-		if (!PlayerController)
-			continue;
-
-		if (!PlayerController->GetPawn())
-			RestartPlayer(PlayerController);
-
-		ASpUnit* PlayerUnit = PlayerController->GetPawn<ASpUnit>();
-		if (!PlayerUnit || !PlayerUnit->HasValidUnitData())
-		{
-			UE_LOG(LogMj, Warning, TEXT("Initial Presentation Pawn preparation failed: %s"), *GetNameSafe(PlayerController));
-			return false;
-		}
-
-		RegisterInitialUnit_Server(PlayerUnit);
-	}
+	SpawnSubsystem->ActivateUnit(NewUnit, false);
+	PlayerState.SetSelectedUnitDefinition_Server(UnitDefinition);
+	PreviousUnit->Destroy();
 
 	return true;
 }
 
-void ASpGameMode::BeginInitialPresentation_Server()
+ASpPlayerUnit* ASpGameMode::SpawnReplacementUnit_Server(USpawnSubsystem& SpawnSubsystem, const ASpPlayerUnit& PreviousUnit, USpUnitDefinition* UnitDefinition)
 {
-	ASpGameState* SpGameState = GetSpGameState();
-	if (!SpGameState)
-		return;
+	FTransform SpawnTransform = PreviousUnit.GetActorTransform();
+	SpawnTransform.SetLocation(PreviousUnit.GetSpawnLocation());
 
-	TArray<uint32> InitialUnitUids;
-	for (const TWeakObjectPtr<ASpUnit>& Unit : InitialUnits)
-	{
-		if (Unit.IsValid() && Unit->HasValidUnitData())
-			InitialUnitUids.Add(Unit->GetUnitUid());
-	}
+	FActorSpawnParameters SpawnInfo;
+	SpawnInfo.ObjectFlags |= RF_Transient;
+	SpawnInfo.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
-	if (InitialUnitUids.IsEmpty())
-		return;
-
-	// 이 시점부터 준비 대상과 참여 플레이어를 고정한다.
-	// 이후 접속한 플레이어는 기존 초기 표현 절차에 참여하지 않는다.
-
-	bInitialPresentationSealed = true;
-
-	RefreshRoomStartAvailability_Server();
-	SpGameState->BeginInitialPresentation_Server(InitialPresentationId, InitialUnitUids);
-
-	// 5초(ready timeout) 이후에도 로드되지 않은 경우를 위한 binding
-	GetWorldTimerManager().SetTimer(ReadyTimeoutHandle, this, 
-		&ThisClass::HandleInitialPresentationTimeout_Server, ReadyTimeoutSeconds, false);
-}
-
-void ASpGameMode::TryCompleteInitialPresentation_Server()
-{
-	if (!bInitialPresentationSealed || bInitialPresentationComplete)
-		return;
-
-	bool bHasInitialPlayer = false;
-	for (const TWeakObjectPtr<ASpPlayerController>& InitialPlayer : InitialPlayers)
-	{
-		if (!InitialPlayer.IsValid())
-			continue;
-
-		bHasInitialPlayer = true;
-		if (!ReadyInitialPlayers.Contains(InitialPlayer))
-			return;
-	}
-
-	if (!bHasInitialPlayer)
-	{
-		AbortInitialPresentation_Server();
-		return;
-	}
-
-	CompleteInitialPresentation_Server();
-}
-
-void ASpGameMode::HandleInitialPresentationTimeout_Server()
-{
-	if (!bInitialPresentationSealed || bInitialPresentationComplete)
-		return;
-
-	TArray<ASpPlayerController*> UnreadyPlayers;
-	for (const TWeakObjectPtr<ASpPlayerController>& InitialPlayer : InitialPlayers)
-	{
-		ASpPlayerController* PlayerController = InitialPlayer.Get();
-		if (!PlayerController || ReadyInitialPlayers.Contains(PlayerController))
-			continue;
-
-		UnreadyPlayers.Add(PlayerController);
-	}
-
-	for (ASpPlayerController* PlayerController : UnreadyPlayers)
-	{
-		if (!PlayerController)
-			continue;
-
-		InitialPlayers.Remove(PlayerController);
-		ReadyInitialPlayers.Remove(PlayerController);
-
-		// 준비 시간을 넘긴 초기 참여자는 연결을 끊지 않고 관전자로 전환
-		PlayerController->StartSpectatingOnly();
-	}
-
-	// 관전 전환 뒤 남은 초기 참여자의 완료 여부를 다시 판정한다
-	TryCompleteInitialPresentation_Server();
-}
-
-void ASpGameMode::CompleteInitialPresentation_Server()
-{
-	// 참여자가 전혀 없으면 Playing으로 전환하지 않고 대기 상태로 되돌림
-	if (bInitialPresentationComplete)
-		return;
-
-	bool bHasInitialPlayer = false;
-	for (const TWeakObjectPtr<ASpPlayerController>& InitialPlayer : InitialPlayers)
-	{
-		if (InitialPlayer.IsValid())
-		{
-			bHasInitialPlayer = true;
-			break;
-		}
-	}
-
-	if (!bHasInitialPlayer)
-	{
-		AbortInitialPresentation_Server();
-		return;
-	}
-
-	UE_LOG(LogMj, Log, TEXT("InitialUnits: %d"), InitialUnits.Num());
-	
-	bInitialPresentationComplete = true;
-	GetWorldTimerManager().ClearTimer(ReadyTimeoutHandle);
-
-	if (ASpGameState* SpGameState = GetSpGameState())
-		SpGameState->SetGamePhase_Server(ESpGamePhase::Playing);
-
-	if (USpawnSubsystem* SpawnSubsystem = GetWorld()->GetSubsystem<USpawnSubsystem>())
-	{
-		for (const TWeakObjectPtr<ASpUnit>& Unit : InitialUnits)
-		{
-			// spawn된 unit들을 활성화
-			if (Unit.IsValid())
-				SpawnSubsystem->ActivateUnit(Unit.Get());
-		}
-	}
-
-	StartMatch();
-}
-
-// exception
-
-void ASpGameMode::AbortInitialPresentation_Server()
-{
-	// 시작 대상이 모두 이탈하면 관전자가 남아 있더라도 Playing으로 진행하지 않는다.
-	if (ConnectedPlayers.IsEmpty())
-	{
-		ResetRoomWhenEmpty_Server();
-		return;
-	}
-
-	GetWorldTimerManager().ClearTimer(ReadyTimeoutHandle);
-	bInitialPresentationComplete = false;
-	ReadyInitialPlayers.Reset();
-
-	if (ASpGameState* SpGameState = GetSpGameState())
-		SpGameState->SetGamePhase_Server(ESpGamePhase::WaitingForPlayers);
-}
-
-void ASpGameMode::ResetRoomWhenEmpty_Server()
-{
-	// 마지막 플레이어가 나가면 게임 진행 상태를 유지하지 않고 다음 방을 위한 대기 상태로 초기화한다.
-	if (!ConnectedPlayers.IsEmpty())
-		return;
-
-	GetWorldTimerManager().ClearTimer(ReadyTimeoutHandle);
-
-	for (const TWeakObjectPtr<ASpUnit>& Unit : InitialUnits)
-	{
-		if (Unit.IsValid())
-			Unit->Push();
-	}
-
-	InitialUnits.Reset();
-	InitialPlayers.Reset();
-	ReadyInitialPlayers.Reset();
-
-	bMapUnitsPrepared = false;
-	bInitialPresentationSealed = false;
-	bInitialPresentationComplete = false;
-
-	if (++InitialPresentationId == 0)
-		++InitialPresentationId;
-
-	SetRoomHost_Server(nullptr);
-
-	if (ASpGameState* SpGameState = GetSpGameState())
-		SpGameState->ResetInitialPresentation_Server();
-
-	if (GetMatchState() == MatchState::InProgress)
-		EndMatch();
-	if (GetMatchState() != MatchState::WaitingToStart)
-		SetMatchState(MatchState::WaitingToStart);
-}
-
-// get
-
-ASpGameState* ASpGameMode::GetSpGameState() const
-{
-	return GetGameState<ASpGameState>();
+	return SpawnSubsystem.SpawnPlayerUnit(UnitDefinition, SpawnTransform, SpawnInfo, FGenericTeamId(SpTeam::PlayerId), false);
 }

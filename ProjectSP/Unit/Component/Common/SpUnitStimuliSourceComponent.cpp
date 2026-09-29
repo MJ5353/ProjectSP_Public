@@ -13,9 +13,9 @@ void USpUnitStimuliSourceComponent::OnClearUnit()
 	UnregisterFromPerceptionSystem();
 }
 
-void USpUnitStimuliSourceComponent::OnUnitActive(bool bActive)
+void USpUnitStimuliSourceComponent::OnUnitPlayable(bool bPlayable)
 {
-	if (bActive)
+	if (bPlayable)
 		RegisterWithPerceptionSystem();
 	else
 		UnregisterFromPerceptionSystem();

@@ -39,4 +39,5 @@ class PROJECTSP_API USpAttributeDefinition : public UPrimaryDataAsset
 	
 public:
 	void GiveToAbilitySystem(USpAbilitySystemComponent* ASC, FSpGrantedAttributeSets* OutGrantedAttributeSets) const;
+	void ResetAttributes(USpAbilitySystemComponent* ASC) const;
 };

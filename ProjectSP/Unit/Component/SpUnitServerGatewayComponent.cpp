@@ -6,38 +6,46 @@
 
 // ==================================================
 
-void USpUnitServerGatewayComponent::PrepareUnit_ServerOnly(const FSpUnitData& UnitData)
+void USpUnitServerGatewayComponent::ApplyUnitData_Server(const FSpUnitData& UnitData) const
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
 	check(UnitData.IsValid());
 
-	Unit->ApplyUnitData_ServerOnly(UnitData);
-	NotifyPrepared_ServerOnly(UnitData);
+	Unit->ApplyUnitData_Server(UnitData);
 }
 
-void USpUnitServerGatewayComponent::ActivateUnit_ServerOnly()
+void USpUnitServerGatewayComponent::PrepareUnit_Server() const
+{
+	ASpUnit* Unit = GetOwnerUnitChecked();
+	check(Unit->GetUnitData().IsValid());
+	
+	NotifyPrepared_Server();
+}
+
+void USpUnitServerGatewayComponent::ActivateUnit_Server()
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
 	check(Unit->GetUnitData().IsValid());
 
-	Unit->SetUnitActive_ServerOnly(true);
-	NotifyActivated_ServerOnly(Unit->GetUnitData());
+	Unit->SetUnitActive_Server(true, true);
+	NotifyActivated_Server(Unit->GetUnitData());
 }
 
-void USpUnitServerGatewayComponent::ReturnUnit_ServerOnly()
+void USpUnitServerGatewayComponent::ReturnUnit_Server()
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
 
-	Unit->SetUnitActive_ServerOnly(false);
-	Unit->ResetUnitData_ServerOnly();
-	NotifyReturned_ServerOnly();
+	Unit->SetUnitActive_Server(false, true);
+	Unit->ResetUnitData_Server();
+	NotifyReturned_Server();
 }
 
 // notify
 
-void USpUnitServerGatewayComponent::NotifyPrepared_ServerOnly(const FSpUnitData& UnitData) const
+void USpUnitServerGatewayComponent::NotifyPrepared_Server() const
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
+	const FSpUnitData& UnitData = Unit->GetUnitData();
 	
 	TInlineComponentArray<UActorComponent*> Components(Unit);
 	for (UActorComponent* Component : Components)
@@ -47,7 +55,7 @@ void USpUnitServerGatewayComponent::NotifyPrepared_ServerOnly(const FSpUnitData&
 	}
 }
 
-void USpUnitServerGatewayComponent::NotifyActivated_ServerOnly(const FSpUnitData& UnitData) const
+void USpUnitServerGatewayComponent::NotifyActivated_Server(const FSpUnitData& UnitData) const
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
 	
@@ -59,7 +67,7 @@ void USpUnitServerGatewayComponent::NotifyActivated_ServerOnly(const FSpUnitData
 	}
 }
 
-void USpUnitServerGatewayComponent::NotifyReturned_ServerOnly() const
+void USpUnitServerGatewayComponent::NotifyReturned_Server() const
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
 	

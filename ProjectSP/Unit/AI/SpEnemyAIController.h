@@ -5,6 +5,7 @@
 #include "SpEnemyAIController.generated.h"
 
 struct FAIStimulus;
+class ASpUnit;
 class UAISenseConfig_Sight;
 class USpEnemyAIDefinition;
 class USpUnitAggroComponent;
@@ -24,7 +25,7 @@ namespace SpEnemyAI::Define
 {
 	inline constexpr float ArriveRange(100.f);
 	inline constexpr float FocusRange(300.f);
-	inline constexpr float FacingToleranceDegrees(1.f);
+	inline constexpr float TargetRangeTolerance(50.f);
 }
 
 // ==================================================
@@ -50,23 +51,35 @@ protected:
 	// aggro
 	TWeakObjectPtr<USpUnitAggroComponent> BoundAggroComponent;
 	FDelegateHandle AggroChangedHandle;
+	
+	// target
+	TWeakObjectPtr<ASpUnit> BoundTargetUnit;
+	FDelegateHandle TargetChangedHandle;
 
 	// ------------------------------------------------
 	
 	ASpEnemyAIController(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
-	
+	void ClearBlackBoard(UBlackboardComponent* BlackboardComponent);
+
 	// virtual
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
-	virtual void OnUnitActive(bool bActive) override;
+	virtual void OnUnitPlayable(bool bPlayable) override;
+	virtual FPathFollowingRequestResult MoveTo(const FAIMoveRequest& MoveRequest, FNavPathSharedPtr* OutPath = nullptr) override;
 
 	// aggro
 	void BindAggroComponent();
 	void UnbindAggroComponent();
 	void HandleAggroChanged();
-	bool IsAggroTargetEligible(const class ASpUnit* Target) const;
-	
+
+	// target
+	void BindTargetChanged();
+	void UnbindTargetChanged();
+	void HandleTargetChanged();
+	bool IsAggroTargetEligible(const ASpUnit* Target) const;
+	void SyncBlackboardTarget();
+
 public:
 	virtual void SetDefinition(USpAIDefinition* Definition) override;
 	

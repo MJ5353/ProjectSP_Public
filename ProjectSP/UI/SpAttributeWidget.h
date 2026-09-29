@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "AttributeSet.h"
-#include "CommonUserWidget.h"
 #include "SpUserWidget.h"
 #include "SpAttributeWidget.generated.h"
 
@@ -30,7 +29,13 @@ UCLASS()
 class PROJECTSP_API USpAttributeWidget : public USpUserWidget
 {
 	GENERATED_BODY()
-
+	
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="MJ - Setting", meta=(AllowPrivateAccess="true"))
+	TArray<FGameplayAttribute> Attributes;
+	
+	TArray<FSpAttributeSubscribeData> AttributeSubscribeData;
+	TWeakObjectPtr<USpAbilitySystemComponent> BoundASC;
+	
 public:
 	UFUNCTION(BlueprintCallable, Category="MJ - Attribute")
 	float GetAttributeValue() const;
@@ -41,24 +46,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category="MJ - Attribute")
 	float GetAttributeValueByAttribute(FGameplayAttribute InAttribute) const;
 
+	bool PrepareAttributePresentation(ASpUnit* InOwnerUnit);
+
 protected:
 	UFUNCTION(BlueprintImplementableEvent, Category="MJ - Attribute")
 	void K2_OnAttributeValueChanged(FGameplayAttribute ChangedAttribute, float OldValue, float NewValue);
 	
+	// set
 	virtual void SetOwnerUnit(ASpUnit* InOwnerUnit) override;
-	
 	virtual void NativeDestruct() override;
-	virtual void SetAttributeSubscribe();
+	
+	// attribute
+	virtual bool TrySetAttributeSubscribe();
 	virtual void ClearAttributeSubscribe();
-
 	virtual void RefreshAttributeValues();
 	virtual void OnAttributeChange(const FOnAttributeChangeData& ChangeData);
-
-private:
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="MJ - Setting", meta=(AllowPrivateAccess="true"))
-	TArray<FGameplayAttribute> Attributes;
-
-	TWeakObjectPtr<USpAbilitySystemComponent> BoundASC;
-	TArray<FSpAttributeSubscribeData> AttributeSubscribeData;
+	
+	// get
+	bool IsAttributePresentationReady(const ASpUnit* InOwnerUnit) const;
+	bool HasValidMaxHp() const;
 };
-

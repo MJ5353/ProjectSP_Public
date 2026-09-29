@@ -5,21 +5,24 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Component/SpUnitClientGatewayComponent.h"
 #include "Component/SpUnitServerGatewayComponent.h"
+#include "Component/Common/SpUnitHPBarComponent.h"
 #include "Component/Common/SpUnitStateComponent.h"
 #include "Component/Common/SpUnitStimuliSourceComponent.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
 #include "ProjectSP/Attribute/SpSpeedAttributeSet.h"
-#include "ProjectSP/Common/SpLog.h"
 #include "ProjectSP/GameFramework/SpGameplayTags.h"
 #include "ProjectSP/Subsystem/UnitRegistrySubsystem.h"
-#include "ProjectSP/Subsystem/ActorPool/ActorPoolSubsystem.h"
 
 // ==================================================
 
 ASpUnit::ASpUnit(const FObjectInitializer& ObjectInitializer) : Super(ObjectInitializer)
 {
+	AbilitySystemComponent = CreateDefaultSubobject<USpAbilitySystemComponent>(TEXT("SpAbilitySystemComponent"));
+	AbilitySystemComponent->SetIsReplicated(true);
+	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
+
 	UnitStateComponent = CreateDefaultSubobject<USpUnitStateComponent>("SpUnitStateComponent");
-	UnitStateComponent->SetIsReplicated(true); // [mj] todo)
+	UnitStateComponent->SetIsReplicated(true);
 	
 	ServerGateway = CreateDefaultSubobject<USpUnitServerGatewayComponent>("SpUnitServerGateway");
 	ClientGateway = CreateDefaultSubobject<USpUnitClientGatewayComponent>("SpUnitClientGateway");
@@ -31,85 +34,70 @@ void ASpUnit::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (GetNetMode() != NM_DedicatedServer && ClientGateway)
-		ClientGateway->InitializePresentation_ClientOnly();
-}
-
-// 풀
-
-void ASpUnit::Push()
-{
-	UActorPoolSubsystem* ActorPoolSubsystem = UActorPoolSubsystem::Get(GetWorld());
-	if (!ActorPoolSubsystem)
-		return;
-
-	ActorPoolSubsystem->ReturnActor(this);
-}
-
-void ASpUnit::OnCreate()
-{
+	// 서버와 클라이언트가 동일한 유닛 초기화 경로를 사용한다.
 	InitUnit();
+
+	if (GetNetMode() != NM_DedicatedServer && ClientGateway)
+		ClientGateway->InitializePresentation_Client();
 }
 
-void ASpUnit::OnDestroy()
+void ASpUnit::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ClearUnit();
+	
+	Super::EndPlay(EndPlayReason);
 }
 
-void ASpUnit::OnSpawn()
-{
-	// ActorPool은 액터 생성 완료와 게임플레이 활성화를 분리한다.
-	// GamePhase가 Playing으로 전환되면 USpUnitServerGateway가 이 유닛을 활성화한다.
-}
-
-void ASpUnit::OnReturn()
-{
-	if (UWorld* World = GetWorld())
-		World->GetTimerManager().ClearTimer(DeadProcessTimerHandle);
-
-	bDeadPresentationStarted = false;
-	if (HasAuthority() && ServerGateway)
-		ServerGateway->ReturnUnit_ServerOnly();
-}
-
-// 유닛 초기화
+// Core ------------------------------------------------
 
 void ASpUnit::InitUnit()
 {
-	CacheUnitManageComponents();
-	InitUnitManageComponents();
+	if (!bUnitManageComponentsInitialized)
+	{
+		CacheUnitManageComponents();
+		InitUnitManageComponents();
+		
+		bUnitManageComponentsInitialized = true;
+	}
+
+	if (USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent())
+		ASC->InitAbilityActorInfo(this, this);
+	
 	RegisterUnitTagChangedEvent();
 }
 
 void ASpUnit::ClearUnit()
 {
+	if (HasAuthority())
+		OnSourceUnavailable.Broadcast();
+
+	InvalidateTarget();
+
 	if (UWorld* World = GetWorld())
 		World->GetTimerManager().ClearTimer(DeadProcessTimerHandle);
 
 	UnregisterUnitTagChangedEvent();
-	ClearUnitManageComponents();
+
+	if (bUnitManageComponentsInitialized)
+	{
+		ClearUnitManageComponents();
+		bUnitManageComponentsInitialized = false;
+	}
 }
 
-void ASpUnit::SetUnitActive_ServerOnly(bool bActive)
+void ASpUnit::SetUnitPlayable(bool bPlayable)
 {
-	check(HasAuthority());
-	
-	if (bActive)
-		ResetBattleFlag();
-	else
-		RemoveReplicatedTag(FSpGameplayTags::Get().BattleFlagTag_Targetable);
-	
-	if (UUnitRegistrySubsystem* UnitRegistrySubsystem = UUnitRegistrySubsystem::Get(GetWorld()))
+	SetActorEnableCollision(bPlayable);
+
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
-		if (bActive)
-			UnitRegistrySubsystem->RegisterUnit(this);
-		else
-			UnitRegistrySubsystem->UnregisterUnit(this);
+		ECollisionEnabled::Type CollisionType = bPlayable ? ECollisionEnabled::Type::QueryOnly : ECollisionEnabled::Type::NoCollision;
+		Capsule->SetCollisionEnabled(CollisionType);
 	}
 
 	if (UCharacterMovementComponent* MovementComp = GetCharacterMovement())
 	{
-		if (bActive)
+		if (bPlayable)
 		{
 			MovementComp->SetMovementMode(MOVE_Walking);
 		}
@@ -120,8 +108,75 @@ void ASpUnit::SetUnitActive_ServerOnly(bool bActive)
 		}
 	}
 
-	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
-		Capsule->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	if (ISpUnitManageListener* ControllerListener = Cast<ISpUnitManageListener>(GetController()))
+	{
+		ControllerListener->OnUnitPlayable(bPlayable);
+	}
+
+	for (UActorComponent* Component : UnitManageComponents)
+	{
+		if (ISpUnitManageListener* Listener = Cast<ISpUnitManageListener>(Component))
+			Listener->OnUnitPlayable(bPlayable);
+	}
+
+	if (HasAuthority())
+	{
+		if (bPlayable)
+			ResetBattleFlag();
+		else
+			RemoveReplicatedTag(SpGameplayTags::UnitFlagTag_Targetable);
+		
+		if (UUnitRegistrySubsystem* UnitRegistrySubsystem = UUnitRegistrySubsystem::Get(GetWorld()))
+		{
+			if (bPlayable)
+				UnitRegistrySubsystem->RegisterUnit(this);
+			else
+				UnitRegistrySubsystem->UnregisterUnit(this);
+		}
+		
+		if (bPlayable)
+		{
+			USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent();
+			const USpUnitDefinition* UnitDefinition = GetUnitDefinition();
+
+			if (ASC && UnitDefinition && UnitDefinition->AttributeDefinition)
+				UnitDefinition->AttributeDefinition->ResetAttributes(ASC);
+		}
+	}
+
+	if (!bPlayable)
+		InvalidateTarget();
+}
+
+void ASpUnit::ResetBattleFlag()
+{
+	USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent();
+	if (!ASC || !HasAuthority())
+		return;
+
+	// 상태 태그를 일괄 삭제한다.
+	FGameplayTagContainer OwnedTags;
+	ASC->GetOwnedGameplayTags(OwnedTags);
+
+	const FGameplayTag StateRoot = SpGameplayTags::UnitStateTag;
+	for (const FGameplayTag& Tag : OwnedTags)
+	{
+		if (Tag.MatchesTag(StateRoot))
+			ASC->SetLooseGameplayTagCount(Tag, 0, EGameplayTagReplicationState::TagOnly);
+	}
+	
+	// 대상 지정 가능 상태를 처리한다.
+	AddReplicatedTag(SpGameplayTags::UnitFlagTag_Targetable);
+}
+
+void ASpUnit::SetUnitActive_Server(bool bActive, bool bSetPlayable)
+{
+	check(HasAuthority());
+	if (!bActive)
+		OnSourceUnavailable.Broadcast();
+
+	SetActorHiddenInGame(!bActive);
+	SetActorTickEnabled(bActive);
 
 	if (ISpUnitManageListener* ControllerListener = Cast<ISpUnitManageListener>(GetController()))
 		ControllerListener->OnUnitActive(bActive);
@@ -131,33 +186,76 @@ void ASpUnit::SetUnitActive_ServerOnly(bool bActive)
 		if (ISpUnitManageListener* Listener = Cast<ISpUnitManageListener>(Component))
 			Listener->OnUnitActive(bActive);
 	}
+
+	if (bSetPlayable)
+		SetUnitPlayable(bActive);
 }
 
-// 상태
-
-void ASpUnit::Dead()
+void ASpUnit::SetUnitPresentationVisible_Client(const bool bVisible)
 {
-	const FGameplayTag DeadTag = FSpGameplayTags::Get().StateTag_Dead;
-	if (!GetSpAbilitySystemComponent() || !HasAuthority() || IsActorBeingDestroyed())
-		return;
-
-	if (!HasTag(DeadTag, true))
-		AddReplicatedTag(DeadTag);
+	check(GetNetMode() != NM_DedicatedServer);
+	SetActorHiddenInGame(!bVisible);
 }
 
-void ASpUnit::K2_BeginDeadPresentation()
+void ASpUnit::SetUnitPresentationVisible_Server(const bool bVisible)
 {
-	BeginDeadPresentation();
+	check(HasAuthority());
+	SetActorHiddenInGame(!bVisible);
 }
 
-void ASpUnit::K2_FinishDeadPresentation()
+// Comp
+
+void ASpUnit::CacheUnitManageComponents()
 {
-	FinishDeadPresentation();
+	TArray<UActorComponent*> Components;
+	GetComponents(Components);
+
+	TArray<UActorComponent*> ListenerComponents;
+	ListenerComponents.Reserve(Components.Num());
+	for (UActorComponent* Component : Components)
+	{
+		if (IsValid(Component) && Cast<ISpUnitManageListener>(Component))
+			ListenerComponents.Add(Component);
+	}
+
+	ListenerComponents.Sort([](const UActorComponent& A, const UActorComponent& B)
+	{
+		const ISpUnitManageListener* ListenerA = Cast<ISpUnitManageListener>(&A);
+		const ISpUnitManageListener* ListenerB = Cast<ISpUnitManageListener>(&B);
+		const int32 PriorityA = ListenerA ? ListenerA->GetUnitManagePriority() : 0;
+		const int32 PriorityB = ListenerB ? ListenerB->GetUnitManagePriority() : 0;
+		return PriorityA < PriorityB;
+	});
+
+	UnitManageComponents.Reset(ListenerComponents.Num());
+	
+	for (UActorComponent* Component : ListenerComponents)
+		UnitManageComponents.Add(Component);
 }
 
-// 유닛 상세 설정
+void ASpUnit::InitUnitManageComponents()
+{
+	for (UActorComponent* Component : UnitManageComponents)
+	{
+		if (ISpUnitManageListener* Listener = Cast<ISpUnitManageListener>(Component))
+			Listener->OnInitUnit();
+	}
+}
 
-void ASpUnit::ApplyUnitData_ServerOnly(const FSpUnitData& InUnitData)
+void ASpUnit::ClearUnitManageComponents()
+{
+	for (UActorComponent* Component : UnitManageComponents)
+	{
+		if (ISpUnitManageListener* Listener = Cast<ISpUnitManageListener>(Component))
+			Listener->OnClearUnit();
+	}
+
+	UnitManageComponents.Reset();
+}
+
+// Unit Data 
+
+void ASpUnit::ApplyUnitData_Server(const FSpUnitData& InUnitData)
 {
 	check(HasAuthority());
 	check(InUnitData.IsValid());
@@ -165,50 +263,138 @@ void ASpUnit::ApplyUnitData_ServerOnly(const FSpUnitData& InUnitData)
 	UnitData = InUnitData;
 }
 
-void ASpUnit::ResetUnitData_ServerOnly()
+void ASpUnit::ResetUnitData_Server()
 {
 	check(HasAuthority());
+	OnSourceUnavailable.Broadcast();
+	InvalidateTarget();
 	
 	UnitData.Reset();
 	SetGenericTeamId(FGenericTeamId::NoTeam);
 }
 
-void ASpUnit::ApplyReplicatedUnitData_ClientOnly()
+void ASpUnit::ApplyReplicatedUnitData_Client()
 {
-	// 클라이언트 유닛에 해당하는지
+	// Listen Server 호스트와 Standalone도 로컬 표현 데이터를 적용한다.
 	check(!HasAuthority() || GetNetMode() == NM_ListenServer || GetNetMode() == NM_Standalone);
 	
 	SetGenericTeamId(FGenericTeamId(UnitData.TeamId));
 }
 
-// 팀
-
-FGenericTeamId ASpUnit::GetGenericTeamId() const
+void ASpUnit::OnRep_UnitData()
 {
-	return UnitData.TeamId;
+	if (!HasAuthority())
+	{
+		if (UnitData.IsValid())
+			InitUnit();
+		else
+			ClearUnit();
+	}
+
+	if (ClientGateway)
+		ClientGateway->ApplyUnitData_Client(UnitData);
 }
 
-ETeamAttitude::Type ASpUnit::GetTeamAttitudeTowards(const IGenericTeamAgentInterface* OtherTeamAgent) const
+// Dead ------------------------------------------------
+
+void ASpUnit::Dead()
 {
-	if (!OtherTeamAgent)
-		return ETeamAttitude::Neutral;
+	const FGameplayTag DeadTag = SpGameplayTags::UnitStateTag_Dead;
+	if (!GetSpAbilitySystemComponent() || !HasAuthority() || IsActorBeingDestroyed())
+		return;
 
-	const uint8 MyTeamId = GetGenericTeamId().GetId();
-	const uint8 OtherTeamId = OtherTeamAgent->GetGenericTeamId().GetId();
-	const uint8 NoTeamId = FGenericTeamId::NoTeam.GetId();
-
-	if (MyTeamId == NoTeamId || OtherTeamId == NoTeamId)
-		return ETeamAttitude::Neutral;
-
-	return MyTeamId == OtherTeamId ? ETeamAttitude::Friendly : ETeamAttitude::Hostile;
+	if (!CheckDead())
+		AddReplicatedTag(DeadTag);
 }
 
-ETeamAttitude::Type ASpUnit::GetTeamAttitudeTowards(const AActor& Other) const
+void ASpUnit::BeginDead()
 {
-	return GetTeamAttitudeTowards(Cast<IGenericTeamAgentInterface>(&Other));
+	if (IsActorBeingDestroyed())
+		return;
+
+	if (HasAuthority())
+		StartDeadProcess_Server();
+	
+	if (GetNetMode() != NM_DedicatedServer)
+		StartDeadPresentation_Client();
 }
 
-// 보유 태그
+void ASpUnit::StartDeadProcess_Server()
+{
+	if (!HasAuthority() || IsActorBeingDestroyed())
+		return;
+	
+	if (GetWorldTimerManager().IsTimerActive(DeadProcessTimerHandle) || !CheckDead())
+		return;
+
+	SetUnitPlayable(false);
+
+	const float DeadProcessTime = UnitData.UnitDefinition ? UnitData.UnitDefinition->DeadProcessTime : 0.0f;
+	const float Delay = FMath::Max(DeadProcessTime, 0.0f);
+	
+	if (Delay <= 0.0f)
+	{
+		FinishDeadProcess_Server();
+		return;
+	}
+	
+	GetWorldTimerManager().SetTimer(DeadProcessTimerHandle, this, &ThisClass::FinishDeadProcess_Server, Delay, false);
+}
+
+void ASpUnit::FinishDeadProcess_Server()
+{
+	if (!HasAuthority() || IsActorBeingDestroyed())
+		return;
+
+	GetWorldTimerManager().ClearTimer(DeadProcessTimerHandle);
+
+	// 타이머가 도는 사이 부활·반환됐다면 오래된 타이머는 무시
+	if (!CheckDead())
+		return;
+
+	HandleDeadProcessFinished_Server();
+}
+
+void ASpUnit::StartDeadPresentation_Client()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+		return;
+	
+	if (bDeadPresentationActive || IsActorBeingDestroyed())
+		return;
+	
+	if (!CheckDead())
+		return;
+	
+	SetUnitPlayable(false);
+	
+	bDeadPresentationActive = true;
+	K2_BeginDeadPresentation();
+}
+
+void ASpUnit::FinishDeadPresentation_Client()
+{
+	if (!bDeadPresentationActive)
+		return;
+	
+	SetUnitPlayable(true);
+	SetUnitPresentationVisible_Client(true);
+	
+	bDeadPresentationActive = false;
+	K2_FinishDeadPresentation();
+
+	if (USpUnitHPBarComponent* HPBar = GetUnitComponent<USpUnitHPBarComponent>())
+		HPBar->RefreshPresentation_Client();
+}
+
+void ASpUnit::HandleDeadProcessFinished_Server()
+{
+	check(HasAuthority());
+	
+	Destroy();
+}
+
+// Tag ------------------------------------------------
 
 void ASpUnit::GetOwnedGameplayTags(FGameplayTagContainer& TagContainer) const
 {
@@ -267,17 +453,130 @@ bool ASpUnit::HasTag(FGameplayTag Tag, bool bExact) const
 	return TagContainer.HasTagExact(Tag);
 }
 
-bool ASpUnit::IsTargetable(const ASpUnit* Attacker) const
+// tag event
+
+void ASpUnit::RegisterUnitTagChangedEvent()
 {
-	return Attacker && Attacker != this && HasTag(FSpGameplayTags::Get().BattleFlagTag_Targetable);
+	USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent();
+
+	if (UnitTagChangedEventASC.Get() != ASC)
+		UnregisterUnitTagChangedEvent();
+
+	if (!ASC || UnitTagChangedEventHandle.IsValid())
+		return;
+
+	UnitTagChangedEventASC = ASC;
+	UnitTagChangedEventHandle = ASC->RegisterGenericGameplayTagEvent().AddUObject(this, &ThisClass::HandleUnitTagChanged);
+	
+	SyncUnitStatesFromAbilitySystem(ASC);
 }
 
-bool ASpUnit::IsAttackable(const ASpUnit* Attacker) const
+void ASpUnit::UnregisterUnitTagChangedEvent()
 {
-	return IsTargetable(Attacker) && Attacker->GetTeamAttitudeTowards(this) == ETeamAttitude::Hostile;
+	ResetAppliedUnitStates();
+
+	if (UnitTagChangedEventHandle.IsValid())
+	{
+		if (USpAbilitySystemComponent* ASC = UnitTagChangedEventASC.Get())
+			ASC->RegisterGenericGameplayTagEvent().Remove(UnitTagChangedEventHandle);
+	}
+
+	UnitTagChangedEventHandle.Reset();
+	UnitTagChangedEventASC.Reset();
 }
 
-// 이동
+void ASpUnit::SyncUnitStatesFromAbilitySystem(USpAbilitySystemComponent* ASC)
+{
+	if (!ASC)
+		return;
+
+	const FGameplayTagContainer PreviousStateTags = AppliedUnitStateTags;
+	for (const FGameplayTag& Tag : PreviousStateTags)
+	{
+		// tag가 지워진 경우
+		if (ASC->GetTagCount(Tag) <= 0)
+			HandleUnitTagChanged(Tag, 0);
+	}
+
+	FGameplayTagContainer OwnedTags;
+	ASC->GetOwnedGameplayTags(OwnedTags);
+
+	const FGameplayTag StateRootTag = SpGameplayTags::UnitStateTag;
+	for (const FGameplayTag& Tag : OwnedTags)
+	{
+		// 추가된 tag를 noti하기 위함
+		if (Tag.MatchesTag(StateRootTag))
+			HandleUnitTagChanged(Tag, ASC->GetTagCount(Tag));
+	}
+}
+
+void ASpUnit::ResetAppliedUnitStates()
+{
+	// 모든 tag 날리기
+	
+	const FGameplayTagContainer PreviousStateTags = AppliedUnitStateTags;
+	for (const FGameplayTag& Tag : PreviousStateTags)
+	{
+		HandleUnitTagChanged(Tag, 0);
+	}
+
+	AppliedUnitStateTags.Reset();
+}
+
+void ASpUnit::HandleUnitTagChanged(const FGameplayTag Tag, int32 NewCount)
+{
+	if (!Tag.MatchesTag(SpGameplayTags::UnitStateTag))
+		return;
+
+	const bool bAdded = NewCount > 0;
+	const bool bWasAdded = AppliedUnitStateTags.HasTagExact(Tag);
+	
+	if (bAdded == bWasAdded)
+		return;
+	
+	if (bAdded)
+		AppliedUnitStateTags.AddTag(Tag);
+	else
+		AppliedUnitStateTags.RemoveTag(Tag);
+	
+	HandleStateChanged(Tag, bAdded);
+	NotifyUnitStateChanged(Tag, bAdded);
+}
+
+// Target ---------------------------------------------
+
+void ASpUnit::SetTargetActor(ASpUnit* InTargetActor)
+{
+	if (!IsValid(InTargetActor))
+		InTargetActor = nullptr;
+
+	if (TargetActor.Get() == InTargetActor && (InTargetActor || !TargetInvalidatedHandle.IsValid()))
+		return;
+
+	if (ASpUnit* PreviousTarget = TargetActor.Get())
+		PreviousTarget->OnTargetInvalidated.Remove(TargetInvalidatedHandle);
+
+	TargetInvalidatedHandle.Reset();
+	TargetActor = InTargetActor;
+
+	if (InTargetActor)
+		TargetInvalidatedHandle = InTargetActor->OnTargetInvalidated.AddUObject(this, &ThisClass::HandleTargetInvalidated);
+
+	OnTargetChanged.Broadcast();
+}
+
+void ASpUnit::InvalidateTarget()
+{
+	SetTargetActor(nullptr);
+	OnTargetInvalidated.Broadcast();
+}
+
+void ASpUnit::HandleTargetInvalidated()
+{
+	SetTargetActor(nullptr);
+}
+
+// Movement ------------------------------------------
 
 bool ASpUnit::MoveToTargetLocation(const FVector& TargetLocation, const float MoveEndDistance, const float SpeedScale)
 {
@@ -300,8 +599,6 @@ bool ASpUnit::RotateToTargetLocation(const FVector& TargetLocation, float DeltaT
 		return false;
 
 	const float RotationRateDegreesPerSecond = FMath::Max(SpeedAttributeSet->GetRotationRateDegreesPerSecond(), 0.0f);
-	const float RotationEndDegree = FMath::Max(SpeedAttributeSet->GetRotationToleranceDegrees(), 0.0f);
-	
 	FVector ToTarget = TargetLocation - GetActorLocation();
 	ToTarget.Z = 0.0f;
 
@@ -318,10 +615,25 @@ bool ASpUnit::RotateToTargetLocation(const FVector& TargetLocation, float DeltaT
 	const FRotator RotationDelta(0.0f, AppliedDeltaYaw, 0.0f);
 	
 	AddActorWorldRotation(RotationDelta);
-	
-	const float NewYaw = CurrentRotation.Yaw + AppliedDeltaYaw;
-	const float RemainingYaw = FMath::Abs(FMath::FindDeltaAngleDegrees(NewYaw, TargetRotation.Yaw));
-	return RemainingYaw > RotationEndDegree;
+	return !IsFacingTargetLocation(TargetLocation);
+}
+
+bool ASpUnit::IsFacingTargetLocation(const FVector& TargetLocation) const
+{
+	FVector ToTarget = TargetLocation - GetActorLocation();
+	ToTarget.Z = 0.0f;
+	if (ToTarget.IsNearlyZero())
+		return true;
+
+	const USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent();
+	const USpSpeedAttributeSet* SpeedAttributeSet = ASC ? ASC->GetSet<USpSpeedAttributeSet>() : nullptr;
+	if (!SpeedAttributeSet)
+		return false;
+
+	const float ToleranceDegrees = FMath::Max(SpeedAttributeSet->GetRotationToleranceDegrees(), 0.0f);
+	const float TargetYaw = ToTarget.Rotation().Yaw;
+	const float CurrentYaw = GetActorRotation().Yaw;
+	return FMath::Abs(FMath::FindDeltaAngleDegrees(CurrentYaw, TargetYaw)) <= ToleranceDegrees;
 }
 
 void ASpUnit::ApplyRotationRateFromAttribute()
@@ -335,220 +647,7 @@ void ASpUnit::ApplyRotationRateFromAttribute()
 		MovementComponent->RotationRate.Yaw = FMath::Max(SpeedAttributeSet->GetRotationRateDegreesPerSecond(), 0.0f);
 }
 
-// 어빌리티
-
-UAbilitySystemComponent* ASpUnit::GetAbilitySystemComponent() const
-{
-	return AbilitySystemComponent;
-}
-
-USpAbilitySystemComponent* ASpUnit::GetSpAbilitySystemComponent() const
-{
-	return AbilitySystemComponent;
-}
-
-void ASpUnit::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-
-	DOREPLIFETIME(ASpUnit, UnitData);
-}
-
-// 내부 구현 ------------------------------------------------
-
-// 컴포넌트 설정
-
-void ASpUnit::CacheUnitManageComponents()
-{
-	TArray<UActorComponent*> Components;
-	GetComponents(Components);
-
-	TArray<UActorComponent*> ListenerComponents;
-	ListenerComponents.Reserve(Components.Num());
-	for (UActorComponent* Component : Components)
-	{
-		if (IsValid(Component) && Cast<ISpUnitManageListener>(Component))
-			ListenerComponents.Add(Component);
-	}
-
-	ListenerComponents.Sort([](const UActorComponent& A, const UActorComponent& B)
-	{
-		const ISpUnitManageListener* ListenerA = Cast<ISpUnitManageListener>(&A);
-		const ISpUnitManageListener* ListenerB = Cast<ISpUnitManageListener>(&B);
-		const int32 PriorityA = ListenerA ? ListenerA->GetUnitManagePriority() : 0;
-		const int32 PriorityB = ListenerB ? ListenerB->GetUnitManagePriority() : 0;
-		return PriorityA < PriorityB;
-	});
-
-	UnitManageComponents.Reset(ListenerComponents.Num());
-	
-	for (UActorComponent* Component : ListenerComponents)
-		UnitManageComponents.Add(Component);
-}
-
-void ASpUnit::InitUnitManageComponents()
-{
-	for (UActorComponent* Component : UnitManageComponents)
-	{
-		if (ISpUnitManageListener* Listener = Cast<ISpUnitManageListener>(Component))
-			Listener->OnInitUnit();
-	}
-}
-
-void ASpUnit::ClearUnitManageComponents()
-{
-	for (UActorComponent* Component : UnitManageComponents)
-	{
-		if (ISpUnitManageListener* Listener = Cast<ISpUnitManageListener>(Component))
-			Listener->OnClearUnit();
-	}
-
-	UnitManageComponents.Reset();
-}
-
-// 유닛 상세 설정
-
-void ASpUnit::ResetBattleFlag()
-{
-	USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent();
-	if (!ASC || !HasAuthority())
-		return;
-
-	// 상태 태그를 일괄 삭제한다.
-	FGameplayTagContainer OwnedTags;
-	ASC->GetOwnedGameplayTags(OwnedTags);
-
-	const FGameplayTag StateRoot = FSpGameplayTags::Get().StateTag;
-	for (const FGameplayTag& Tag : OwnedTags)
-	{
-		if (Tag.MatchesTag(StateRoot))
-			ASC->SetLooseGameplayTagCount(Tag, 0, EGameplayTagReplicationState::TagOnly);
-	}
-	
-	// 대상 지정 가능 상태를 처리한다.
-	AddReplicatedTag(FSpGameplayTags::Get().BattleFlagTag_Targetable);
-}
-
-// 태그 이벤트
-
-void ASpUnit::RegisterUnitTagChangedEvent()
-{
-	USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent();
-	if (UnitTagChangedEventHandle.IsValid() || !ASC)
-		return;
-
-	UnitTagChangedEventHandle = ASC->RegisterGenericGameplayTagEvent().AddUObject(this, &ThisClass::HandleUnitTagChanged);
-}
-
-void ASpUnit::UnregisterUnitTagChangedEvent()
-{
-	if (!UnitTagChangedEventHandle.IsValid())
-		return;
-
-	if (USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent())
-		ASC->RegisterGenericGameplayTagEvent().Remove(UnitTagChangedEventHandle);
-
-	UnitTagChangedEventHandle.Reset();
-}
-
-void ASpUnit::HandleUnitTagChanged(const FGameplayTag Tag, int32 NewCount)
-{
-	if (!Tag.MatchesTag(FSpGameplayTags::Get().StateTag))
-		return;
-
-	const bool bAdded = NewCount > 0;
-
-	HandleStateChanged(Tag, bAdded);
-	NotifyUnitStateChanged(Tag, bAdded);
-}
-
-// 사망
-
-void ASpUnit::BeginDeadPresentation()
-{
-	if (bDeadPresentationStarted || IsActorBeingDestroyed())
-		return;
-
-	bDeadPresentationStarted = true;
-
-	// C++ 처리
-	StartDeadProcess();
-}
-
-void ASpUnit::FinishDeadPresentation()
-{
-	if (!bDeadPresentationStarted || IsActorBeingDestroyed())
-		return;
-
-	bDeadPresentationStarted = false;
-
-	if (UWorld* World = GetWorld())
-	{
-		FTimerManager& TimerManager = World->GetTimerManager();
-		if (TimerManager.IsTimerActive(DeadProcessTimerHandle) || TimerManager.IsTimerPaused(DeadProcessTimerHandle))
-			return;
-
-		const float DeadProcessTime = UnitData.UnitDefinition ? UnitData.UnitDefinition->DeadProcessTime : 0.0f;
-		if (DeadProcessTime > 0.0f)
-		{
-			TimerManager.SetTimer(DeadProcessTimerHandle, this, &ThisClass::FinishDeadProcess, DeadProcessTime, false);
-			return;
-		}
-	}
-
-	// C++ 처리
-	FinishDeadProcess();
-}
-
-void ASpUnit::StartDeadProcess()
-{
-	if (!HasAuthority() || IsActorBeingDestroyed())
-		return;
-
-	if (UWorld* World = GetWorld())
-		World->GetTimerManager().ClearTimer(DeadProcessTimerHandle);
-
-	SetUnitActive_ServerOnly(false);
-}
-
-void ASpUnit::FinishDeadProcess()
-{
-	if (!HasAuthority() || IsActorBeingDestroyed())
-		return;
-
-	if (UWorld* World = GetWorld())
-		World->GetTimerManager().ClearTimer(DeadProcessTimerHandle);
-
-	EUnitDeadProcess Type = UnitData.UnitDefinition ? UnitData.UnitDefinition->DeadProcess : EUnitDeadProcess::Remove;
-	switch (Type)
-	{
-		case EUnitDeadProcess::Resurrect:
-		{
-			ResurrectByDeadProcess();
-			break;
-		}
-		case EUnitDeadProcess::Remove: default:
-		{
-			DestroyByDeadProcess();
-			break;
-		}
-	}
-}
-
-void ASpUnit::DestroyByDeadProcess()
-{
-	Push();
-}
-
-void ASpUnit::ResurrectByDeadProcess()
-{
-	if (USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent())
-		ASC->RestoreHp();
-
-	SetUnitActive_ServerOnly(true);
-}
-
-// 상태
+// State ----------------------------------------------
 
 void ASpUnit::NotifyUnitStateChanged(FGameplayTag StateTag, bool bAdded)
 {
@@ -564,19 +663,80 @@ void ASpUnit::NotifyUnitStateChanged(FGameplayTag StateTag, bool bAdded)
 
 void ASpUnit::HandleStateChanged(FGameplayTag StateTag, bool bAdded)
 {
-	if (!StateTag.MatchesTagExact(FSpGameplayTags::Get().StateTag_Dead))
-		return;
-
-	if (!bAdded)
-		return;
-
-	BeginDeadPresentation();
+	if (StateTag.MatchesTagExact(SpGameplayTags::UnitStateTag_Dead))
+	{
+		if (bAdded)
+			OnDead();
+		else if (GetNetMode() != NM_DedicatedServer)
+			FinishDeadPresentation_Client();
+	}
 }
 
-// 복제
-
-void ASpUnit::OnRep_UnitData()
+void ASpUnit::OnDead()
 {
-	if (ClientGateway)
-		ClientGateway->ApplyUnitData_ClientOnly(UnitData);
+	if (HasAuthority())
+		OnSourceUnavailable.Broadcast();
+
+	InvalidateTarget();
+
+	if (USpAbilitySystemComponent* ASC = GetSpAbilitySystemComponent())
+		ASC->ResetForDead();
+	
+	BeginDead();
+}
+
+// Get ------------------------------------------------
+
+bool ASpUnit::CheckDead() const
+{
+	return HasTag(SpGameplayTags::UnitStateTag_Dead, true);
+}
+
+bool ASpUnit::IsAttackable(const ASpUnit* Target) const
+{
+	const FGameplayTag TargetableTag = SpGameplayTags::UnitFlagTag_Targetable;
+	const bool bValidAttacker = !CheckDead();
+	const bool bValidTarget = Target && Target != this && !Target->CheckDead() && Target->HasTag(TargetableTag, false);
+	const bool bHostile = bValidTarget && GetTeamAttitudeTowards(Target) == ETeamAttitude::Hostile;
+	
+	return bValidAttacker && bValidTarget && bHostile;
+}
+
+UAbilitySystemComponent* ASpUnit::GetAbilitySystemComponent() const
+{
+	return AbilitySystemComponent;
+}
+
+void ASpUnit::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ASpUnit, UnitData);
+}
+
+// team
+
+FGenericTeamId ASpUnit::GetGenericTeamId() const
+{
+	return UnitData.TeamId;
+}
+
+ETeamAttitude::Type ASpUnit::GetTeamAttitudeTowards(const AActor& Other) const
+{
+	return GetTeamAttitudeTowards(Cast<IGenericTeamAgentInterface>(&Other));
+}
+
+ETeamAttitude::Type ASpUnit::GetTeamAttitudeTowards(const IGenericTeamAgentInterface* OtherTeamAgent) const
+{
+	if (!OtherTeamAgent)
+		return ETeamAttitude::Neutral;
+
+	const uint8 MyTeamId = GetGenericTeamId().GetId();
+	const uint8 OtherTeamId = OtherTeamAgent->GetGenericTeamId().GetId();
+	const uint8 NoTeamId = FGenericTeamId::NoTeam.GetId();
+
+	if (MyTeamId == NoTeamId || OtherTeamId == NoTeamId)
+		return ETeamAttitude::Neutral;
+
+	return MyTeamId == OtherTeamId ? ETeamAttitude::Friendly : ETeamAttitude::Hostile;
 }

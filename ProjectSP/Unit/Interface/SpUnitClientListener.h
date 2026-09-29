@@ -18,6 +18,7 @@ class PROJECTSP_API ISpUnitClientListener
 	GENERATED_BODY()
 
 public:
-	virtual bool PrepareClientPresentation(const FSpUnitData& UnitData) { return true; }
+	virtual bool IsClientPresentationRequired() const { return false; }
+	virtual void PrepareClientPresentation(const FSpUnitData& UnitData) {}
 	virtual void StopClientPresentation() {}
 };

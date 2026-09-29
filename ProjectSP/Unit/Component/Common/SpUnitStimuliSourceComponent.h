@@ -15,5 +15,5 @@ class PROJECTSP_API USpUnitStimuliSourceComponent : public UAIPerceptionStimuliS
 public:
 	virtual void OnInitUnit() override;
 	virtual void OnClearUnit() override;
-	virtual void OnUnitActive(bool bActive) override;
+	virtual void OnUnitPlayable(bool bPlayable) override;
 };

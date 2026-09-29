@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Engine/DataAsset.h"
+#include "ProjectSP/Input/SpInputBehavior.h"
 #include "SpInputDefinition.generated.h"
 
 class UInputAction;
@@ -10,7 +11,7 @@ class UInputAction;
 // ==================================================
 
 USTRUCT(Blueprintable)
-struct FSpInputAction
+struct FSpInputActionBinding
 {
 	GENERATED_BODY()
 
@@ -19,6 +20,18 @@ struct FSpInputAction
 	
 	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
 	FGameplayTag InputTag;
+
+	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
+	FGameplayTag AbilityTag;
+
+	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
+	TSubclassOf<USpInputBehavior> BehaviorClass;
+
+	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
+	bool bClearStateOnNewInput = false;
+	
+	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
+	bool bSendTriggeredUpdates = false;
 };
 
 // ==================================================
@@ -30,10 +43,10 @@ class PROJECTSP_API USpInputDefinition : public UDataAsset
 	
 public:
 	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
-	TArray<FSpInputAction> NativeInputActions; // locomotion같은 것들
+	TArray<FSpInputActionBinding> InputActions;
 
-	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
-	TArray<FSpInputAction> AbilityInputActions;
+	// ------------------------------------------------
 	
-	const UInputAction* FindNativeInputActionForTag(const FGameplayTag& InputTag) const;
+	const UInputAction* FindInputActionForTag(const FGameplayTag& InputTag) const;
+	const FSpInputActionBinding* FindInputBindingForTag(const FGameplayTag& InputTag) const;
 };

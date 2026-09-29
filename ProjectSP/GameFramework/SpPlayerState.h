@@ -1,58 +1,52 @@
 #pragma once
 
-#include "AbilitySystemInterface.h"
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
 #include "SpPlayerState.generated.h"
 
-class ASpPlayerUnit;
-class ASpPlayerState;
-class UAbilitySystemComponent;
-class USpAbilitySystemComponent;
-class USpInputDefinition;
-class USpCameraDefinition;
 class USpUnitDefinition;
 
 // ==================================================
 
-// 클라/서버가 공유하는 판 상태
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FSpSelectedUnitChanged);
+
+// --------------------------------------------------
 
 UCLASS()
-class PROJECTSP_API ASpPlayerState : public APlayerState, public IAbilitySystemInterface
+class PROJECTSP_API ASpPlayerState : public APlayerState
 {
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(EditDefaultsOnly, Category="MJ - Setting")
-	TObjectPtr<USpUnitDefinition> UnitDefinition;
+	UPROPERTY(Transient, BlueprintReadOnly, ReplicatedUsing = OnRep_SelectedUnitDefinition, Category = "MJ | Replicate")
+	TObjectPtr<USpUnitDefinition> SelectedUnitDefinition;
+
+	UPROPERTY(BlueprintAssignable, Category="MJ - Unit")
+	FSpSelectedUnitChanged OnSelectedUnitChanged;
 
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_ReadyToStart, Category = "MJ | Replicate")
 	bool bReadyToStart = false;
-	
-protected:
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MJ | Component")
-	TObjectPtr<USpAbilitySystemComponent> AbilitySystemComponent;
-	
-	UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadWrite, Category = "MJ - Runtime")
-	TObjectPtr<USpUnitDefinition> GrantedAbilityUnitDefinition;
 
 	// ------------------------------------------------
-
-public:
+	
 	ASpPlayerState();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	
-	void InitializeAbilitySystem(ASpPlayerUnit* InAvatar);
 	void SetReadyToStart_Server(bool bInReadyToStart);
+	void SetSelectedUnitDefinition_Server(USpUnitDefinition* UnitDefinition);
+
+	UFUNCTION(BlueprintPure, Category="MJ - PlayerState")
+	USpUnitDefinition* GetUnitDefinition() const;
 	
-	// get
-	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
-	USpAbilitySystemComponent* GetSpAbilitySystemComponent() const;
+	UFUNCTION(BlueprintPure, Category="MJ - PlayerState")
+	bool IsReadyToStart() const { return bReadyToStart; }
 
-protected:
+private:
 	void NotifyLobbyStateChanged();
-
+	
 	UFUNCTION()
 	void OnRep_ReadyToStart();
+
+	UFUNCTION()
+	void OnRep_SelectedUnitDefinition();
 };

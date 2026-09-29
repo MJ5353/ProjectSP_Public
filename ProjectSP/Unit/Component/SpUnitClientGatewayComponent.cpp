@@ -5,70 +5,127 @@
 
 // ==================================================
 
-void USpUnitClientGatewayComponent::InitializePresentation_ClientOnly()
-{
-	ASpUnit* Unit = GetOwnerUnitChecked();
-	bPresentationInitialized = true;
-	Unit->SetActorHiddenInGame(true);
+// public
 
-	ApplyUnitData_ClientOnly(Unit->GetUnitData());
+void USpUnitClientGatewayComponent::InitializePresentation_Client()
+{
+	if (bPresentationInitialized)
+		return;
+
+	bPresentationInitialized = true;
+	
+	ASpUnit* Unit = GetOwnerUnitChecked();
+	Unit->SetUnitPresentationVisible_Client(false);
+	
+	const FSpUnitData& UnitData = Unit->GetUnitData();
+	ApplyUnitData_Client(UnitData);
 }
 
-void USpUnitClientGatewayComponent::ApplyUnitData_ClientOnly(const FSpUnitData& UnitData)
+void USpUnitClientGatewayComponent::ApplyUnitData_Client(const FSpUnitData& UnitData)
 {
 	if (!bPresentationInitialized)
 		return;
 
 	ASpUnit* Unit = GetOwnerUnitChecked();
-	Unit->ApplyReplicatedUnitData_ClientOnly();
+	Unit->ApplyReplicatedUnitData_Client();
 
 	if (!UnitData.IsValid())
 	{
-		StopPresentation_ClientOnly();
+		StopPresentation_Client();
 		return;
 	}
 
-	if (!NotifyPresentationPrepared_ClientOnly(UnitData))
+	if (PresentationUnitUid != UnitData.UnitUid)
 	{
-		Unit->SetActorHiddenInGame(true);
-		return;
-	}
-
-	bPresentationStarted = true;
-	Unit->SetActorHiddenInGame(false);
-
-	if (UWorld* World = Unit->GetWorld())
-	{
-		if (ASpGameState* GameState = World->GetGameState<ASpGameState>())
-			GameState->NotifyUnitPresentationReady_ClientOnly(UnitData.UnitUid);
+		StopPresentation_Client();
+		BeginPresentation_Client(UnitData);
 	}
 }
 
-bool USpUnitClientGatewayComponent::NotifyPresentationPrepared_ClientOnly(const FSpUnitData& UnitData) const
+void USpUnitClientGatewayComponent::ReportPresentationReady_Client(const UActorComponent* Listener, const uint32 UnitUid)
+{
+	if (!Listener || bPresentationReady || UnitUid != PresentationUnitUid)
+		return;
+
+	if (PendingPresentationListeners.Remove(Listener) > 0 && PendingPresentationListeners.IsEmpty())
+		CompletePresentation_Client();
+}
+
+void USpUnitClientGatewayComponent::ReportPresentationReadyToGameState_Client()
+{
+	if (!bPresentationReady || PresentationUnitUid == 0)
+		return;
+
+	if (ASpGameState* GameState = GetOwnerUnitChecked()->GetWorld()->GetGameState<ASpGameState>())
+		GameState->NotifyUnitPresentationReady_Client(PresentationUnitUid);
+}
+
+// private
+
+void USpUnitClientGatewayComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (bPresentationInitialized)
+		StopPresentation_Client();
+
+	Super::EndPlay(EndPlayReason);
+}
+
+void USpUnitClientGatewayComponent::BeginPresentation_Client(const FSpUnitData& UnitData)
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
-	TInlineComponentArray<UActorComponent*> Components(Unit);
+	PresentationUnitUid = UnitData.UnitUid;
 
-	// 클라이언트 전용 comp에 전달
+	TInlineComponentArray<UActorComponent*> Components(Unit);
+	TArray<ISpUnitClientListener*, TInlineAllocator<8>> ClientListeners;
+	ClientListeners.Reserve(Components.Num());
+
 	for (UActorComponent* Component : Components)
 	{
 		if (ISpUnitClientListener* Listener = Cast<ISpUnitClientListener>(Component))
 		{
-			// 하나라도 실패하면 false - 나중에 전체 성공시 prepare로 처리하고 싶으면 사용
-			if (!Listener->PrepareClientPresentation(UnitData))
-				return false;
+			ClientListeners.Add(Listener);
+
+			if (Listener->IsClientPresentationRequired())
+				PendingPresentationListeners.Add(Component);
 		}
 	}
+
+	// for문을 따로 돌리는 이유는, pending list를 완성한 뒤에 prepare를 호출하기 위함
 	
-	return true;
+	for (ISpUnitClientListener* Listener : ClientListeners)
+		Listener->PrepareClientPresentation(UnitData);
+
+	if (PendingPresentationListeners.IsEmpty())
+		CompletePresentation_Client();
 }
 
-void USpUnitClientGatewayComponent::StopPresentation_ClientOnly()
+void USpUnitClientGatewayComponent::CompletePresentation_Client()
+{
+	if (bPresentationReady || PresentationUnitUid == 0)
+		return;
+
+	bPresentationReady = true;
+	ReportPresentationReadyToGameState_Client();
+
+	ASpUnit* Unit = GetOwnerUnitChecked();
+	const FSpUnitData& UnitData = Unit->GetUnitData();
+	
+	if (UnitData.UnitUid == PresentationUnitUid && UnitData.bRevealWhenPresentationReady)
+		Unit->SetUnitPresentationVisible_Client(true);
+}
+
+void USpUnitClientGatewayComponent::StopPresentation_Client()
 {
 	ASpUnit* Unit = GetOwnerUnitChecked();
-	Unit->SetActorHiddenInGame(true);
+	if (bPresentationReady)
+	{
+		if (ASpGameState* GameState = Unit->GetWorld()->GetGameState<ASpGameState>())
+			GameState->RemoveUnitPresentationReady_Client(PresentationUnitUid);
+	}
 
-	if (bPresentationStarted)
+	Unit->SetUnitPresentationVisible_Client(false);
+
+	if (PresentationUnitUid != 0)
 	{
 		TInlineComponentArray<UActorComponent*> Components(Unit);
 		for (UActorComponent* Component : Components)
@@ -78,7 +135,9 @@ void USpUnitClientGatewayComponent::StopPresentation_ClientOnly()
 		}
 	}
 
-	bPresentationStarted = false;
+	PendingPresentationListeners.Reset();
+	bPresentationReady = false;
+	PresentationUnitUid = 0;
 }
 
 // get
@@ -89,6 +148,6 @@ ASpUnit* USpUnitClientGatewayComponent::GetOwnerUnitChecked() const
 	
 	check(Unit);
 	check(Unit->GetNetMode() != NM_DedicatedServer);
-	
+
 	return Unit;
 }

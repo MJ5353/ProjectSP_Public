@@ -17,16 +17,21 @@ class PROJECTSP_API USpUnitHPBarComponent : public UWidgetComponent, public ISpU
 	
 	UPROPERTY(Transient, VisibleAnywhere, Category="MJ - Runtime")
 	TWeakObjectPtr<ASpUnit> OwnerUnit;
+	uint32 PresentationUnitUid = 0;
 	
 public:
-	virtual bool PrepareClientPresentation(const FSpUnitData& UnitData) override;
+	virtual bool IsClientPresentationRequired() const override;
+	virtual void PrepareClientPresentation(const FSpUnitData& UnitData) override;
+	virtual void StopClientPresentation() override;
 	virtual void OnUnitActive(bool bActive) override;
+	
+	void RefreshPresentation_Client();
 
 protected:
 	virtual void BeginPlay() override;
 	virtual void InitWidget() override;
-
-private:
-	void TryApplyOwnerUnit();
+	
+	bool TryApplyOwnerUnit();
+	void TryReportPresentationReady();
 };
 

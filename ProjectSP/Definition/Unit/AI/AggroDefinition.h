@@ -20,7 +20,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "MJ - Setting", meta = (AllowPrivateAccess = "true"))
 	float SightInitialThreat = 1.0f;
 
-	// 시야를 잃은 뒤에도 Threat를 유지하는 시간
+	// Threat를 유지하는 시간
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "MJ - Setting", meta = (AllowPrivateAccess = "true"))
 	float ThreatMemorySeconds = 5.0f;
 

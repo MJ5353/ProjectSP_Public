@@ -23,8 +23,6 @@ public:
 
 	// ------------------------------------------------
 	
-	virtual void StartInitialLoading() override;
-	
 	static USPAssetManager& Get();
 	static UObject* SynchronousLoadAsset(const FSoftObjectPath& AssetPath);
 	

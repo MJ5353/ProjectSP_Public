@@ -1,8 +1,12 @@
 #include "SpGameState.h"
+#include "EngineUtils.h"
+#include "SpPlayerController.h"
 #include "Net/UnrealNetwork.h"
-#include "ProjectSP/GameFramework/SpGameMode.h"
-#include "ProjectSP/GameFramework/SpPlayerController.h"
-#include "ProjectSP/GameFramework/SpPlayerState.h"
+#include "ProjectSP/Definition/Player/SpInitialSettingDefinition.h"
+#include "ProjectSP/Definition/Unit/SpUnitDefinition.h"
+#include "ProjectSP/Unit/SpUnit.h"
+#include "ProjectSP/Unit/SpPlayerUnit.h"
+#include "ProjectSP/Unit/Component/SpUnitClientGatewayComponent.h"
 
 // ==================================================
 
@@ -16,8 +20,18 @@ void ASpGameState::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	
-	if (!HasAuthority() && GamePhase == ESpGamePhase::Preparing && !bPresentationReadyReported)
-		TryReportPresentationReady_ClientOnly();
+	if (GetNetMode() == NM_DedicatedServer)
+		return;
+	
+	// 복제된 준비 목록과 실제 로컬 유닛 로드 완료를 맞추는 클라이언트 처리
+	if (bPresentationRefreshPending_Client)
+	{
+		bPresentationRefreshPending_Client = false;
+		RequestPresentationReadyReports_Client();
+	}
+
+	TryRevealLobbyMapUnits_Client();
+	TryReportPresentationReady_Client();
 }
 
 void ASpGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -29,6 +43,8 @@ void ASpGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ASpGameState, bRoomStartAvailable);
 	DOREPLIFETIME(ASpGameState, InitialPresentationId);
 	DOREPLIFETIME(ASpGameState, InitialPresentationUnitUids);
+	DOREPLIFETIME(ASpGameState, LobbyMapPresentationUnitUids);
+	DOREPLIFETIME(ASpGameState, bLobbyMapUnitsActivated);
 }
 
 void ASpGameState::AddPlayerState(APlayerState* PlayerState)
@@ -43,139 +59,155 @@ void ASpGameState::RemovePlayerState(APlayerState* PlayerState)
 	NotifyLobbyStateChanged();
 }
 
-// server
-
-void ASpGameState::BeginInitialPresentation_Server(const uint32 InInitialPresentationId, const TArray<uint32>& InInitialUnitUids)
-{
-	check(HasAuthority());
-	check(InInitialPresentationId != 0);
-
-	InitialPresentationId = InInitialPresentationId;
-	InitialPresentationUnitUids = InInitialUnitUids;
-
-	SetGamePhase_Server(ESpGamePhase::Preparing);
-	SetRoomStartAvailable_Server(false);
-	
-	// Listen Server의 호스트는 복제를 받지 않으므로
-	// 이미 수집한 로컬 준비 상태를 같은 조건으로 평가한다.
-	TryReportPresentationReady_ClientOnly();
-}
-
-void ASpGameState::ResetInitialPresentation_Server()
-{
-	check(HasAuthority());
-
-	InitialPresentationId = 0;
-	InitialPresentationUnitUids.Reset();
-	
-	SetGamePhase_Server(ESpGamePhase::WaitingForPlayers);
-	SetRoomStartAvailable_Server(false);
-}
-
-void ASpGameState::SetGamePhase_Server(const ESpGamePhase InGamePhase)
-{
-	check(HasAuthority());
-	GamePhase = InGamePhase;
-
-	NotifyGamePhaseChanged();
-	ForceNetUpdate();
-}
-
-void ASpGameState::SetRoomHostPlayerState_Server(ASpPlayerState* InRoomHostPlayerState)
-{
-	check(HasAuthority());
-
-	if (RoomHostPlayerState == InRoomHostPlayerState)
-		return;
-
-	RoomHostPlayerState = InRoomHostPlayerState;
-	NotifyLobbyStateChanged();
-	ForceNetUpdate();
-}
-
-void ASpGameState::SetRoomStartAvailable_Server(const bool bInRoomStartAvailable)
-{
-	check(HasAuthority());
-
-	if (bRoomStartAvailable == bInRoomStartAvailable)
-		return;
-
-	bRoomStartAvailable = bInRoomStartAvailable;
-	NotifyLobbyStateChanged();
-	ForceNetUpdate();
-}
-
-// notify
+// lobby state
 
 void ASpGameState::NotifyLobbyStateChanged()
 {
 	OnLobbyStateChanged.Broadcast();
 }
 
-void ASpGameState::NotifyGamePhaseChanged()
-{
-	OnGamePhaseChanged.Broadcast();
-}
+// presentation ready
 
-// client
-
-void ASpGameState::NotifyUnitPresentationReady_ClientOnly(const uint32 UnitUid)
+void ASpGameState::NotifyUnitPresentationReady_Client(const uint32 UnitUid)
 {
 	if (GetNetMode() == NM_DedicatedServer || UnitUid == 0)
 		return;
 
-	PreparedUnitUids_ClientOnly.Add(UnitUid);
-	TryReportPresentationReady_ClientOnly();
+	PreparedUnitUids_Client.Add(UnitUid);
+	if (GamePhase == ESpGamePhase::Playing)
+	{
+		if (bLobbyMapUnitsActivated && LobbyMapPresentationUnitUids.Contains(UnitUid))
+		{
+			for (TActorIterator<ASpUnit> It(GetWorld()); It; ++It)
+			{
+				if (It->GetUnitUid() == UnitUid)
+				{
+					It->SetUnitPresentationVisible_Client(true);
+					break;
+				}
+			}
+		}
+		return;
+	}
+
+	TryRevealLobbyMapUnits_Client();
 }
 
-// private
-
-void ASpGameState::TryReportPresentationReady_ClientOnly()
+void ASpGameState::RemoveUnitPresentationReady_Client(const uint32 UnitUid)
 {
-	// 클라이언트가 초기 유닛의 prepare를 끝냈음을 서버에 보내는 함수
+	if (PreparedUnitUids_Client.Remove(UnitUid) == 0)
+		return;
+
+	if (InitialPresentationUnitUids.Contains(UnitUid))
+		bPresentationReadyReported = false;
+
+	if (LobbyMapPresentationUnitUids.Contains(UnitUid))
+		bLobbyMapPresentationVisible_Client = false;
+}
+
+bool ASpGameState::IsPlayableUnitDefinition(const USpUnitDefinition* UnitDefinition) const
+{
+	if (!IsValid(UnitDefinition) || !InitialDefinition || !UnitDefinition->UnitClass || !UnitDefinition->UnitClass->IsChildOf(ASpPlayerUnit::StaticClass()))
+		return false;
+
+	for (const USpUnitDefinition* PlayableUnit : InitialDefinition->PlayableUnitDefinitions)
+	{
+		if (PlayableUnit == UnitDefinition)
+			return true;
+	}
+
+	return false;
+}
+
+USpUnitDefinition* ASpGameState::GetDefaultUnitDefinition() const
+{
+	return InitialDefinition ? InitialDefinition->UnitDefinition.Get() : nullptr;
+}
+
+TArray<USpUnitDefinition*> ASpGameState::GetPlayableUnitDefinitions() const
+{
+	TArray<USpUnitDefinition*> PlayableUnits;
+	if (InitialDefinition)
+	{
+		for (USpUnitDefinition* UnitDefinition : InitialDefinition->PlayableUnitDefinitions)
+		{
+			if (IsPlayableUnitDefinition(UnitDefinition))
+				PlayableUnits.AddUnique(UnitDefinition);
+		}
+	}
 	
-	if (bPresentationReadyReported || GamePhase != ESpGamePhase::Preparing || InitialPresentationId == 0)
-		return;
+	return PlayableUnits;
+}
 
-	if (HasAuthority() && GetNetMode() != NM_ListenServer && GetNetMode() != NM_Standalone)
-		return;
+void ASpGameState::RequestPresentationReadyReports_Client()
+{
+	for (TActorIterator<ASpUnit> It(GetWorld()); It; ++It)
+	{
+		const uint32 UnitUid = It->GetUnitUid();
+		
+		if (!InitialPresentationUnitUids.Contains(UnitUid) && !LobbyMapPresentationUnitUids.Contains(UnitUid))
+			continue;
 
-	// 아직 복제할 목록을 받지 못한 경우 return
-	if (InitialPresentationUnitUids.IsEmpty())
-		return;
+		if (USpUnitClientGatewayComponent* ClientGateway = It->GetClientGateway())
+			ClientGateway->ReportPresentationReadyToGameState_Client();
+	}
+}
 
-	// 표현 준비가 하나라도 덜 끝난 경우 return
+void ASpGameState::TryReportPresentationReady_Client()
+{
+	if (GamePhase != ESpGamePhase::Starting || bPresentationReadyReported ||
+		InitialPresentationId == 0 || InitialPresentationUnitUids.IsEmpty())
+	{
+		return;
+	}
+
 	for (const uint32 UnitUid : InitialPresentationUnitUids)
 	{
-		if (!PreparedUnitUids_ClientOnly.Contains(UnitUid))
+		if (!PreparedUnitUids_Client.Contains(UnitUid))
 			return;
 	}
 
-	if (ASpPlayerController* PlayerController = Cast<ASpPlayerController>(GetWorld()->GetFirstPlayerController()))
-	{
-		bPresentationReadyReported = true;
+	ASpPlayerController* PlayerController = Cast<ASpPlayerController>(GetWorld()->GetFirstPlayerController());
+	if (!PlayerController || !PlayerController->IsLocalController())
+		return;
 
-		if (HasAuthority()) // listen server 인 경우
-		{
-			if (ASpGameMode* GameMode = GetWorld()->GetAuthGameMode<ASpGameMode>())
-				GameMode->HandleInitialPresentationReady_Server(PlayerController, InitialPresentationId);
-		}
-		else
-		{
-			PlayerController->ServerReportInitialPresentationReady(InitialPresentationId);
-		}
+	// Listen Server도 같은 RPC 경로를 사용한다. 서버 상태의 Enter 도중에는 보고하지 않는다.
+	bPresentationReadyReported = true;
+	PlayerController->ServerReportInitialPresentationReady(InitialPresentationId);
+}
+
+void ASpGameState::TryRevealLobbyMapUnits_Client()
+{
+	if (GamePhase == ESpGamePhase::Playing || bLobbyMapPresentationVisible_Client || !bLobbyMapUnitsActivated || LobbyMapPresentationUnitUids.IsEmpty())
+		return;
+
+	for (const uint32 UnitUid : LobbyMapPresentationUnitUids)
+	{
+		if (!PreparedUnitUids_Client.Contains(UnitUid))
+			return;
+	}
+
+	bLobbyMapPresentationVisible_Client = true;
+	
+	for (TActorIterator<ASpUnit> It(GetWorld()); It; ++It)
+	{
+		if (LobbyMapPresentationUnitUids.Contains(It->GetUnitUid()))
+			It->SetUnitPresentationVisible_Client(true);
 	}
 }
 
+// rep notify
+
 void ASpGameState::OnRep_GamePhase()
 {
-	TryReportPresentationReady_ClientOnly();
-	NotifyGamePhaseChanged();
+	bPresentationRefreshPending_Client = true;
+	OnGamePhaseChanged.Broadcast();
 }
 
 void ASpGameState::OnRep_RoomHostPlayerState()
 {
 	NotifyLobbyStateChanged();
+	ForceNetUpdate();
 }
 
 void ASpGameState::OnRep_RoomStartAvailable()
@@ -186,5 +218,11 @@ void ASpGameState::OnRep_RoomStartAvailable()
 void ASpGameState::OnRep_InitialPresentation()
 {
 	bPresentationReadyReported = false;
-	TryReportPresentationReady_ClientOnly();
+	bPresentationRefreshPending_Client = true;
+}
+
+void ASpGameState::OnRep_LobbyMapPresentation()
+{
+	bLobbyMapPresentationVisible_Client = false;
+	bPresentationRefreshPending_Client = true;
 }

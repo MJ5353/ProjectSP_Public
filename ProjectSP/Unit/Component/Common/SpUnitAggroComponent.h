@@ -51,10 +51,10 @@ public:
 	// unit lifecycle
 	virtual void OnInitUnit() override;
 	virtual void OnClearUnit() override;
-	virtual void OnUnitActive(bool bActive) override;
+	virtual void OnUnitPlayable(bool bPlayable) override;
 
 	// update threat
-	void SetTargetSensed(AActor* Actor, bool bSensed); // 시야에 들어온 경우
+	void SetTargetSensed(ASpUnit* TargetUnit, bool bSensed); // 시야에 들어온 경우
 	void AddDamageThreat(AActor* Instigator, float AppliedDamage); // 피해를 받은 경우
 	void ClearThreat();
 
@@ -71,5 +71,5 @@ protected:
 	void BroadcastAggroChanged();
 
 public:
-	ASpUnit* GetBestTarget(AActor* CurrentTarget, float TargetSwitchRatio, TFunctionRef<bool(const ASpUnit*)> IsTargetEligible) const;
+	ASpUnit* GetBestTarget(ASpUnit* CurrentTarget, float TargetSwitchRatio, TFunctionRef<bool(const ASpUnit*)> IsTargetEligible) const;
 };

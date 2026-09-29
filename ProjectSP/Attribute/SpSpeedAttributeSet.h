@@ -33,6 +33,7 @@ protected:
 	
 public:
 	virtual void PreAttributeBaseChange(const FGameplayAttribute& Attribute, float& NewValue) const override;
+	virtual void PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue) override;
 	virtual void PostGameplayEffectExecute(const struct FGameplayEffectModCallbackData& Data) override;
 	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -49,5 +50,6 @@ public:
 	void OnRep_RotationToleranceDegrees(const FGameplayAttributeData& OldAttribute);
 
 private:
+	void ApplyMoveSpeedToMovement(float NewMoveSpeed) const;
 	void ApplyRotationRateToMovement(float RotPerSecond) const;
 };

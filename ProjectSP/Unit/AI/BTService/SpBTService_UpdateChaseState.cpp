@@ -1,5 +1,6 @@
 #include "SpBTService_UpdateChaseState.h"
 #include "BehaviorTree/BlackboardComponent.h"
+#include "ProjectSP/Unit/SpUnit.h"
 #include "ProjectSP/Unit/AI/SpEnemyAIController.h"
 
 // ==================================================
@@ -21,8 +22,9 @@ void USpBTService_UpdateChaseState::TickNode(UBehaviorTreeComponent& OwnerComp, 
 
 	Controller->RefreshCombatTarget();
 
-	if (UObject* TargetObject = Blackboard->GetValueAsObject(SpEnemyAI::BlackboardKeys::TargetActor); 
-		AActor* TargetActor = Cast<AActor>(TargetObject))
+	const ASpUnit* Unit = Controller->GetPawn<ASpUnit>();
+	const ASpUnit* TargetActor = Unit ? Unit->GetTargetActor() : nullptr;
+	if (Unit && Unit->IsAttackable(TargetActor))
 	{
 		const bool bCanChase = Controller->CheckNeedChase(TargetActor->GetActorLocation());
 		Blackboard->SetValueAsBool(SpEnemyAI::BlackboardKeys::CanChaseTarget, bCanChase);

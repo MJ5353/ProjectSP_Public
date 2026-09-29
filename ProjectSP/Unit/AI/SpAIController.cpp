@@ -6,6 +6,15 @@
 
 void ASpAIController::SetDefinition(USpAIDefinition* Definition)
 {
+	if (!Definition)
+	{
+		if (UBrainComponent* Brain = GetBrainComponent())
+			Brain->StopLogic(TEXT("AI definition is nullptr"));
+
+		BehaviorTree = nullptr;
+		return;
+	}
+
 	BehaviorTree = Definition->BehaviorTree;
 	TryStartBehaviorTree();
 }
@@ -16,9 +25,9 @@ void ASpAIController::OnPossess(APawn* InPawn)
 	TryStartBehaviorTree();
 }
 
-void ASpAIController::OnUnitActive(bool bActive)
+void ASpAIController::OnUnitPlayable(bool bPlayable)
 {
-	bUnitGameplayActive = bActive;
+	bUnitGameplayActive = bPlayable;
 
 	if (bUnitGameplayActive)
 	{

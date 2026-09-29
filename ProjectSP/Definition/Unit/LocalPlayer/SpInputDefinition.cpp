@@ -2,14 +2,19 @@
 
 // ==================================================
 
-const UInputAction* USpInputDefinition::FindNativeInputActionForTag(const FGameplayTag& InputTag) const
+const UInputAction* USpInputDefinition::FindInputActionForTag(const FGameplayTag& InputTag) const
 {
-	for (const FSpInputAction& Action : NativeInputActions)
+	const FSpInputActionBinding* Binding = FindInputBindingForTag(InputTag);
+	return Binding ? Binding->InputAction.Get() : nullptr;
+}
+
+const FSpInputActionBinding* USpInputDefinition::FindInputBindingForTag(const FGameplayTag& InputTag) const
+{
+	for (const FSpInputActionBinding& Binding : InputActions)
 	{
-		if (Action.InputAction && Action.InputTag == InputTag)
-			return Action.InputAction;
+		if (Binding.InputAction && Binding.InputTag == InputTag)
+			return &Binding;
 	}
 
-	// [mj] todo) 여기서 크래시 내고싶은데...
 	return nullptr;
 }

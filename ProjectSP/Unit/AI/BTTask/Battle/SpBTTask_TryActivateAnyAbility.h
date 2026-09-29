@@ -14,7 +14,7 @@ class PROJECTSP_API USpBTTask_TryActivateAnyAbility : public UBTTaskNode
 
 public:
 	USpBTTask_TryActivateAnyAbility();
-	bool CheckTargetCondition(const UBlackboardComponent* BlackboardComponent, const ASpUnit* OwnerUnit, float ExecuteRange);
+	bool CheckTargetCondition(const ASpUnit* OwnerUnit, float AllowedRange, bool bNeedTargetFacing);
 
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 };

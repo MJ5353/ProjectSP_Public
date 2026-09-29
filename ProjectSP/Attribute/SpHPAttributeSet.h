@@ -16,8 +16,9 @@ public:
 	SP_ATTRIBUTE_ACCESSORS(USpHPAttributeSet, CurrentHP);
 	SP_ATTRIBUTE_ACCESSORS(USpHPAttributeSet, MaxHP);
 	SP_ATTRIBUTE_ACCESSORS(USpHPAttributeSet, Damage);
-	
-protected:
+
+	// ------------------------------------------------
+
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_CurrentHP, Category = "MJ - Replicate")
 	FGameplayAttributeData CurrentHP;
 
@@ -29,7 +30,6 @@ protected:
 
 	// ------------------------------------------------
 	
-public:
 	USpHPAttributeSet();
 	
 	virtual void PreAttributeBaseChange(const FGameplayAttribute& Attribute, float& NewValue) const override;

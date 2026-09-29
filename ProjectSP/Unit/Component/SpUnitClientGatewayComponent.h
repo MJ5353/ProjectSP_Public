@@ -15,19 +15,31 @@ class PROJECTSP_API USpUnitClientGatewayComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
+protected:
+	UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadWrite, Category = "MJ - Runtime")
+	TSet<UActorComponent*> PendingPresentationListeners;
+	
 	// 클라이언트 유닛이면 true, data가 오기 전까지 unit을 hide 한다.
 	bool bPresentationInitialized = false;
 	
-	// 유효한 data로 presentation을 시작했는지
-	bool bPresentationStarted = false;
+	// 현재 표현 세션의 유닛 UID
+	uint32 PresentationUnitUid = 0;
 
-public:
-	void InitializePresentation_ClientOnly();
-	void ApplyUnitData_ClientOnly(const FSpUnitData& UnitData);
+	// 필수 Listener가 모두 준비됐는지
+	bool bPresentationReady = false;
+
+public:	
+	void InitializePresentation_Client();
+	void ApplyUnitData_Client(const FSpUnitData& UnitData);
+	void ReportPresentationReady_Client(const UActorComponent* Listener, uint32 UnitUid);
+	void ReportPresentationReadyToGameState_Client();
 
 private:
-	bool NotifyPresentationPrepared_ClientOnly(const FSpUnitData& UnitData) const;
-	void StopPresentation_ClientOnly();
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	void BeginPresentation_Client(const FSpUnitData& UnitData);
+	void CompletePresentation_Client();
+	void StopPresentation_Client();
 	
 	// get
 	ASpUnit* GetOwnerUnitChecked() const;

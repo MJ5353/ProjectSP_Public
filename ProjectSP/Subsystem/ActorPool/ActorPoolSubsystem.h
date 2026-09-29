@@ -42,7 +42,7 @@ public:
 	void ReturnActor(AActor* Actor);
 
 private:
-	void SetActiveActor(AActor* Actor, bool bActive);
+	void SetPoolManagedActorActive(AActor* Actor, bool bActive);
 	
 	UFUNCTION()
 	void HandlePooledActorDestroyed(AActor* Actor);

@@ -2,6 +2,7 @@
 #include "SpActorPoolDefine.h"
 #include "Engine/World.h"
 #include "SpPoolableActor.h"
+#include "ProjectSP/Unit/SpUnit.h"
 
 // ==================================================
 
@@ -96,10 +97,9 @@ void UActorPoolSubsystem::FinishSpawnActor_Deferred(AActor* Actor, const FTransf
 		Actor->SetActorTransform(Transform);
 	}
 
-	// 생성 완료와 게임플레이 활성화를 의도적으로 분리
-	// 초기 게임 시작 대기 중 유닛은 비활성 상태이며
-	// UnitData가 server로부터 복제되어야만 클라이언트 표현을 준비할 수 있다.
-	SetActiveActor(Actor, false);
+	// 일반 풀 Actor만 Pool이 표현과 Tick을 관리한다.
+	// Unit은 SpawnSubsystem에서 SetUnitActive_Server로 상태를 설정한다.
+	SetPoolManagedActorActive(Actor, false);
 	
 	Info->bIsPendingSpawn = false;
 }
@@ -113,7 +113,7 @@ void UActorPoolSubsystem::ActivateActor(AActor* Actor)
 	if (ISpPoolableActor* PoolableActor = Cast<ISpPoolableActor>(Actor))
 		PoolableActor->OnSpawn();
 	
-	SetActiveActor(Actor, true);
+	SetPoolManagedActorActive(Actor, true);
 }
 
 void UActorPoolSubsystem::ReturnActor(AActor* Actor)
@@ -129,7 +129,7 @@ void UActorPoolSubsystem::ReturnActor(AActor* Actor)
 	if (ISpPoolableActor* PoolableActor = Cast<ISpPoolableActor>(Actor))
 		PoolableActor->OnReturn();
 
-	SetActiveActor(Actor, false);
+	SetPoolManagedActorActive(Actor, false);
 
 	Info->bIsInPool = true;
 	Bucket->Actors.Add(Actor);
@@ -137,8 +137,11 @@ void UActorPoolSubsystem::ReturnActor(AActor* Actor)
 
 // private
 
-void UActorPoolSubsystem::SetActiveActor(AActor* Actor, bool bActive)
+void UActorPoolSubsystem::SetPoolManagedActorActive(AActor* Actor, bool bActive)
 {
+	if (Actor->IsA<ASpUnit>())
+		return;
+
 	Actor->SetActorHiddenInGame(!bActive);
 	Actor->SetActorTickEnabled(bActive);
 }

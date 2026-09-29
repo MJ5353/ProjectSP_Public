@@ -1,6 +1,7 @@
 #include "SpAttributeWidget.h"
+#include "ProjectSP/Attribute/SpHPAttributeSet.h"
 #include "ProjectSP/Unit/SpUnit.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
 
 // ==================================================
 
@@ -25,12 +26,22 @@ float USpAttributeWidget::GetAttributeValueByAttribute(FGameplayAttribute InAttr
 	return BoundASC->GetNumericAttribute(InAttribute);
 }
 
+bool USpAttributeWidget::PrepareAttributePresentation(ASpUnit* InOwnerUnit)
+{
+	SetOwnerUnit(InOwnerUnit);
+	
+	// 소유자 설정, ASC 구독이 완료됐는지
+	return IsAttributePresentationReady(InOwnerUnit);
+}
+
+// set
+
 void USpAttributeWidget::SetOwnerUnit(ASpUnit* InOwnerUnit)
 {
 	Super::SetOwnerUnit(InOwnerUnit);
 	
 	ClearAttributeSubscribe();
-	SetAttributeSubscribe();
+	TrySetAttributeSubscribe();
 }
 
 void USpAttributeWidget::NativeDestruct()
@@ -40,23 +51,29 @@ void USpAttributeWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-void USpAttributeWidget::SetAttributeSubscribe()
+// attribute
+
+bool USpAttributeWidget::TrySetAttributeSubscribe()
 {
 	if (!OwnerUnit.IsValid() || Attributes.IsEmpty())
-		return;
+		return false;
 
 	USpAbilitySystemComponent* ASC = OwnerUnit->GetSpAbilitySystemComponent();
 	if (!ASC)
-		return;
+		return false;
 
 	BoundASC = ASC;
 
 	for (const FGameplayAttribute& Attribute : Attributes)
 	{
 		if (!Attribute.IsValid())
-			continue;
+		{
+			ClearAttributeSubscribe();
+			return false;
+		}
 
-		const bool bAlreadySubscribed = AttributeSubscribeData.ContainsByPredicate(
+		const bool bAlreadySubscribed = AttributeSubscribeData.ContainsByPredicate
+		(
 			[&Attribute](const FSpAttributeSubscribeData& Data)
 			{
 				return Data.Attribute == Attribute;
@@ -64,14 +81,23 @@ void USpAttributeWidget::SetAttributeSubscribe()
 		);
 
 		if (bAlreadySubscribed)
-			continue;
+		{
+			ClearAttributeSubscribe();
+			return false;
+		}
 
 		FDelegateHandle Handle = ASC->RegisterAttributeChangeCallback(Attribute, this, &USpAttributeWidget::OnAttributeChange);
-		if (Handle.IsValid())
-			AttributeSubscribeData.Emplace(Attribute, Handle);
+		if (!Handle.IsValid())
+		{
+			ClearAttributeSubscribe();
+			return false;
+		}
+
+		AttributeSubscribeData.Emplace(Attribute, Handle);
 	}
 
 	RefreshAttributeValues();
+	return true;
 }
 
 void USpAttributeWidget::ClearAttributeSubscribe()
@@ -88,11 +114,14 @@ void USpAttributeWidget::ClearAttributeSubscribe()
 
 void USpAttributeWidget::RefreshAttributeValues()
 {
+	if (!HasValidMaxHp())
+		return;
+
 	for (const FGameplayAttribute& Attribute : Attributes)
 	{
 		if (!Attribute.IsValid())
 			continue;
-
+		
 		const float CurrentValue = GetAttributeValueByAttribute(Attribute);
 		K2_OnAttributeValueChanged(Attribute, CurrentValue, CurrentValue);
 	}
@@ -100,7 +129,52 @@ void USpAttributeWidget::RefreshAttributeValues()
 
 void USpAttributeWidget::OnAttributeChange(const FOnAttributeChangeData& ChangeData)
 {
+	if (!HasValidMaxHp())
+		return;
+
+	const FGameplayAttribute MaxHPAttribute = USpHPAttributeSet::GetMaxHPAttribute();
+	if (ChangeData.Attribute == MaxHPAttribute)
+	{
+		RefreshAttributeValues();
+		return;
+	}
+
 	K2_OnAttributeValueChanged(ChangeData.Attribute, ChangeData.OldValue, ChangeData.NewValue);
 }
 
+// get
 
+bool USpAttributeWidget::IsAttributePresentationReady(const ASpUnit* InOwnerUnit) const
+{
+	if (!InOwnerUnit || OwnerUnit.Get() != InOwnerUnit || Attributes.IsEmpty())
+		return false;
+
+	USpAbilitySystemComponent* ASC = InOwnerUnit->GetSpAbilitySystemComponent();
+	if (!ASC || BoundASC.Get() != ASC || AttributeSubscribeData.Num() != Attributes.Num())
+		return false;
+
+	for (const FGameplayAttribute& Attribute : Attributes)
+	{
+		if (!Attribute.IsValid())
+			return false;
+
+		const FSpAttributeSubscribeData* SubscribeData = AttributeSubscribeData.FindByPredicate
+		(
+			[&Attribute](const FSpAttributeSubscribeData& Data)
+			{
+				return Data.Attribute == Attribute;
+			}
+		);
+		if (!SubscribeData || !SubscribeData->Handle.IsValid())
+			return false;
+	}
+
+	return true;
+}
+
+bool USpAttributeWidget::HasValidMaxHp() const
+{
+	const FGameplayAttribute MaxHPAttribute = USpHPAttributeSet::GetMaxHPAttribute();
+	return !Attributes.Contains(MaxHPAttribute)
+		|| GetAttributeValueByAttribute(MaxHPAttribute) > KINDA_SMALL_NUMBER;
+}

@@ -1,6 +1,6 @@
 #include "SpUnitAggroComponent.h"
 #include "Engine/World.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
 #include "ProjectSP/Definition/Unit/AI/AggroDefinition.h"
 #include "ProjectSP/GameFramework/SpGameplayTags.h"
 #include "ProjectSP/Unit/SpUnit.h"
@@ -56,11 +56,11 @@ void USpUnitAggroComponent::OnClearUnit()
 	ClearThreat();
 }
 
-void USpUnitAggroComponent::OnUnitActive(bool bActive)
+void USpUnitAggroComponent::OnUnitPlayable(bool bPlayable)
 {
 	ClearThreat();
-	
-	if (!bActive)
+
+	if (!bPlayable)
 		return;
 	
 	SetUp();
@@ -68,12 +68,11 @@ void USpUnitAggroComponent::OnUnitActive(bool bActive)
 
 // stimuli
 
-void USpUnitAggroComponent::SetTargetSensed(AActor* Actor, bool bSensed)
+void USpUnitAggroComponent::SetTargetSensed(ASpUnit* TargetUnit, bool bSensed)
 {
 	if (!AggroDefinition)
 		return;
-	
-	ASpUnit* TargetUnit = Cast<ASpUnit>(Actor);
+
 	if (!TargetUnit)
 		return;
 
@@ -167,12 +166,7 @@ void USpUnitAggroComponent::SetUp()
 bool USpUnitAggroComponent::IsValidThreatTarget(const ASpUnit* TargetUnit) const
 {
 	const ASpUnit* OwnerUnit = Cast<ASpUnit>(GetOwner());
-	
-	if (!OwnerUnit || !IsValid(TargetUnit) || !TargetUnit->IsAttackable(OwnerUnit))
-		return false;
-	
-	ETeamAttitude::Type Attitude = TargetUnit->GetTeamAttitudeTowards(*OwnerUnit);
-	return Attitude == ETeamAttitude::Hostile;
+	return OwnerUnit && OwnerUnit->IsAttackable(TargetUnit);
 }
 
 ASpUnit* USpUnitAggroComponent::ResolveThreatTarget(AActor* Instigator) const
@@ -251,7 +245,7 @@ void USpUnitAggroComponent::BroadcastAggroChanged()
 
 // get
 
-ASpUnit* USpUnitAggroComponent::GetBestTarget(AActor* CurrentTarget, const float TargetSwitchRatio, TFunctionRef<bool(const ASpUnit*)> IsTargetEligible) const
+ASpUnit* USpUnitAggroComponent::GetBestTarget(ASpUnit* CurrentTarget, const float TargetSwitchRatio, TFunctionRef<bool(const ASpUnit*)> IsTargetEligible) const
 {
 	ASpUnit* BestTarget = nullptr;
 	float BestThreat = 0.0f;
@@ -269,7 +263,7 @@ ASpUnit* USpUnitAggroComponent::GetBestTarget(AActor* CurrentTarget, const float
 		}
 	}
 
-	ASpUnit* CurrentUnit = Cast<ASpUnit>(CurrentTarget);
+	ASpUnit* CurrentUnit = CurrentTarget;
 	if (!CurrentUnit || !BestTarget || CurrentUnit == BestTarget || !IsValidThreatTarget(CurrentUnit) || !IsTargetEligible(CurrentUnit))
 		return BestTarget;
 

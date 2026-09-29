@@ -1,5 +1,4 @@
 #include "SpSpeedAttributeSet.h"
-
 #include "AbilitySystemComponent.h"
 #include "GameplayEffectExtension.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -12,24 +11,16 @@ void USpSpeedAttributeSet::PreAttributeBaseChange(const FGameplayAttribute& Attr
 {
 	Super::PreAttributeBaseChange(Attribute, NewValue);
 	
-	if (Attribute == GetMoveSpeedAttribute())
-	{
-		UAbilitySystemComponent* AbilitySystemComponent = GetOwningAbilitySystemComponent();
-		AActor* Actor = AbilitySystemComponent ? AbilitySystemComponent->GetAvatarActor() : nullptr;
-		if (!Actor)
-			return;
-		
-		ASpUnit* Unit = Cast<ASpUnit>(Actor);
-		if (!Unit)
-			return;
-		
-		if (UCharacterMovementComponent* MovementComponent = Unit->GetCharacterMovement())
-			MovementComponent->MaxWalkSpeed = NewValue;
-	}
-	else if (Attribute == GetRotationRateDegreesPerSecondAttribute())
-	{
+	if (Attribute == GetRotationRateDegreesPerSecondAttribute())
 		ApplyRotationRateToMovement(NewValue);
-	}
+}
+
+void USpSpeedAttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue)
+{
+	Super::PostAttributeChange(Attribute, OldValue, NewValue);
+
+	if (Attribute == GetMoveSpeedAttribute())
+		ApplyMoveSpeedToMovement(NewValue);
 }
 
 void USpSpeedAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data)
@@ -37,25 +28,7 @@ void USpSpeedAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCal
 	Super::PostGameplayEffectExecute(Data);
 	
 	const FGameplayAttribute& ModifiedAttribute = Data.EvaluatedData.Attribute;
-	if (ModifiedAttribute == GetMoveSpeedAttribute())
-	{
-		UAbilitySystemComponent* AbilitySystemComponent = GetOwningAbilitySystemComponent();
-		AActor* Actor = AbilitySystemComponent ? AbilitySystemComponent->GetAvatarActor() : nullptr;
-		if (!Actor)
-			return;
-		
-		ASpUnit* Unit = Cast<ASpUnit>(Actor);
-		if (!Unit)
-			return;
-		
-		if (UCharacterMovementComponent* MovementComponent = Unit->GetCharacterMovement())
-			MovementComponent->MaxWalkSpeed = GetMoveSpeed();
-	}
-	else if (ModifiedAttribute == GetAttackSpeedAttribute())
-	{
-		// [mj] todo) anim에 반영
-	}
-	else if (ModifiedAttribute == GetRotationRateDegreesPerSecondAttribute())
+	if (ModifiedAttribute == GetRotationRateDegreesPerSecondAttribute())
 	{
 		ApplyRotationRateToMovement(GetRotationRateDegreesPerSecond());
 	}
@@ -74,6 +47,7 @@ void USpSpeedAttributeSet::GetLifetimeReplicatedProps(TArray<class FLifetimeProp
 void USpSpeedAttributeSet::OnRep_MoveSpeed(const FGameplayAttributeData& OldAttribute)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(USpSpeedAttributeSet, MoveSpeed, OldAttribute);
+	ApplyMoveSpeedToMovement(GetMoveSpeed());
 }
 
 void USpSpeedAttributeSet::OnRep_AttackSpeed(const FGameplayAttributeData& OldAttribute)
@@ -90,6 +64,19 @@ void USpSpeedAttributeSet::OnRep_RotationRateDegreesPerSecond(const FGameplayAtt
 void USpSpeedAttributeSet::OnRep_RotationToleranceDegrees(const FGameplayAttributeData& OldAttribute)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(USpSpeedAttributeSet, RotationToleranceDegrees, OldAttribute);
+}
+
+void USpSpeedAttributeSet::ApplyMoveSpeedToMovement(const float NewMoveSpeed) const
+{
+	UAbilitySystemComponent* AbilitySystemComponent = GetOwningAbilitySystemComponent();
+	ASpUnit* Unit = AbilitySystemComponent ? Cast<ASpUnit>(AbilitySystemComponent->GetAvatarActor()) : nullptr;
+	if (!Unit)
+		return;
+
+	if (UCharacterMovementComponent* MovementComponent = Unit->GetCharacterMovement())
+	{
+		MovementComponent->MaxWalkSpeed = NewMoveSpeed;
+	}
 }
 
 void USpSpeedAttributeSet::ApplyRotationRateToMovement(const float RotPerSecond) const

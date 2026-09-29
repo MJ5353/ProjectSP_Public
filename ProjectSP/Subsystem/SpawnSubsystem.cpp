@@ -1,10 +1,11 @@
 #include "SpawnSubsystem.h"
 #include "ActorPool/ActorPoolSubsystem.h"
-#include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
 #include "ProjectSP/Definition/Unit/SpUnitDefinition.h"
 #include "ProjectSP/Definition/GameMode/SpMapDefinition.h"
 #include "ProjectSP/Definition/Unit/AI/SpAIUnitDefinition.h"
+#include "ProjectSP/Unit/SpAIUnit.h"
+#include "ProjectSP/Unit/SpPlayerUnit.h"
 #include "ProjectSP/Unit/SpUnit.h"
 #include "ProjectSP/Unit/AI/SpAIController.h"
 #include "ProjectSP/Unit/Component/SpUnitClientGatewayComponent.h"
@@ -39,7 +40,7 @@ void USpawnSubsystem::SpawnMapUnits(const USpMapDefinition* MapDefinition, TArra
 			for (const FTransform& Transform : SpawnTransforms)
 			{
 				FActorSpawnParameters Param = FActorSpawnParameters();
-				if (ASpUnit* SpawnedUnit = SpawnUnit(GroupData.UnitDefinition, Transform, Param, TeamId, bActivateImmediately))
+				if (ASpAIUnit* SpawnedUnit = SpawnAIUnit(GroupData.UnitDefinition, Transform, Param, TeamId, bActivateImmediately))
 				{
 					if (OutSpawnedUnits)
 						OutSpawnedUnits->Add(SpawnedUnit);
@@ -52,22 +53,69 @@ void USpawnSubsystem::SpawnMapUnits(const USpMapDefinition* MapDefinition, TArra
 	SpawnGroups(MapDefinition->OtherSpawnGroups, FGenericTeamId::NoTeam);
 }
 
-ASpUnit* USpawnSubsystem::SpawnUnit(USpUnitDefinition* UnitDefinition, const FTransform& SpawnTransform, FActorSpawnParameters& SpawnParameters, const FGenericTeamId& TeamId, const bool bActivateImmediately)
+void USpawnSubsystem::ActivateUnit(ASpUnit* Unit, const bool bKeepAlwaysRelevant)
 {
-	if (!UnitDefinition || !UnitDefinition->UnitClass)
+	UWorld* World = GetWorld();
+	
+	if (!Unit || !World || World->GetNetMode() == NM_Client)
+		return;
+
+	if (USpUnitServerGatewayComponent* ServerGateway = Unit->GetServerGateway())
+		ServerGateway->ActivateUnit_Server();
+
+	// 로비에서 맵 유닛 presentation을 준비하는 동안에는 모든 클라이언트가 유닛을 받을 수 있어야 한다.
+	if (!bKeepAlwaysRelevant)
+		ReleaseInitialRelevancy(Unit);
+	else
+		Unit->ForceNetUpdate();
+}
+
+void USpawnSubsystem::ReleaseInitialRelevancy(ASpUnit* Unit)
+{
+	UWorld* World = GetWorld();
+	if (!Unit || !World || World->GetNetMode() == NM_Client)
+		return;
+
+	// 초기 presentation 대상 전송이 끝난 뒤에만 거리 기반 relevancy로 되돌린다.
+	Unit->bAlwaysRelevant = false;
+	Unit->ForceNetUpdate();
+}
+
+// spawn unit
+
+ASpAIUnit* USpawnSubsystem::SpawnAIUnit(USpUnitDefinition* UnitDefinition, const FTransform& SpawnTransform, FActorSpawnParameters& SpawnParameters, const FGenericTeamId& TeamId, const bool bActivateImmediately)
+{
+	if (!UnitDefinition || !UnitDefinition->UnitClass || !UnitDefinition->UnitClass->IsChildOf(ASpAIUnit::StaticClass()))
 		return nullptr;
 
-	const UWorld* World = GetWorld();
+	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_Client)
 		return nullptr;
+
+	const bool bEnemyUnit = TeamId.GetId() == SpTeam::EnemyId;
+	if (bEnemyUnit)
+	{
+		for (auto It = ActiveEnemyUnits.CreateIterator(); It; ++It)
+		{
+			const ASpAIUnit* Unit = (*It).Get();
+			
+			// valid 하지 않은 unit 제거
+			if (!IsValid(Unit) || !Unit->HasValidUnitData() || Unit->GetGenericTeamId().GetId() != SpTeam::EnemyId)
+				It.RemoveCurrent();
+		}
+
+		// 활성화할 적 유닛 수를 제한
+		if (ActiveEnemyUnits.Num() >= MaxConcurrentEnemyUnits)
+			return nullptr;
+	}
 
 	UActorPoolSubsystem* ActorPoolSubsystem = World->GetSubsystem<UActorPoolSubsystem>();
 	if (!ActorPoolSubsystem)
 		return nullptr;
 
-	const FSpActorPoolKey Key = {UnitDefinition->UnitClass, FName(UnitDefinition->Name)};
+	const FSpActorPoolKey Key = {UnitDefinition->UnitClass, FName(*UnitDefinition->GetPathName())};
 
-	ASpUnit* SpawnedUnit = ActorPoolSubsystem->BeginSpawnActor_Deferred<ASpUnit>(Key, SpawnTransform, SpawnParameters);
+	ASpAIUnit* SpawnedUnit = ActorPoolSubsystem->BeginSpawnActor_Deferred<ASpAIUnit>(Key, SpawnTransform, SpawnParameters);
 	if (!SpawnedUnit)
 		return nullptr;
 
@@ -75,8 +123,12 @@ ASpUnit* USpawnSubsystem::SpawnUnit(USpUnitDefinition* UnitDefinition, const FTr
 	if (!ServerGateway)
 		return nullptr;
 
-	FSpUnitData UnitData = FSpUnitData(AllocateUnitUid(), UnitDefinition, TeamId.GetId());
-	ServerGateway->PrepareUnit_ServerOnly(UnitData);
+	FSpUnitData UnitData(AllocateUnitUid(), UnitDefinition, TeamId.GetId());
+	UnitData.bRevealWhenPresentationReady = bActivateImmediately;
+	ServerGateway->ApplyUnitData_Server(UnitData);
+	
+	if (bEnemyUnit)
+		ActiveEnemyUnits.Add(SpawnedUnit);
 	
 	bool bSpawnAIController = false;
 	USpAIDefinition* AIDefinition = UnitDefinition->AIDefinition;
@@ -88,17 +140,7 @@ ASpUnit* USpawnSubsystem::SpawnUnit(USpUnitDefinition* UnitDefinition, const FTr
 	}
 
 	ActorPoolSubsystem->FinishSpawnActor_Deferred(SpawnedUnit, SpawnTransform);
-
-	// 숨김 + 무충돌 상태에서도 초기 UnitData를 클라이언트에 보낸다.
-	SpawnedUnit->bAlwaysRelevant = true;
-	ServerGateway->PrepareUnit_ServerOnly(UnitData);
-	
-	// Listen Server의 호스트는 자신의 UnitData를 네트워크 복제로 다시 수신하지 않음
-	if (World->GetNetMode() == NM_ListenServer)
-	{
-		if (USpUnitClientGatewayComponent* ClientGateway = SpawnedUnit->GetClientGateway())
-			ClientGateway->ApplyUnitData_ClientOnly(SpawnedUnit->GetUnitData());
-	}
+	PrepareSpawnedUnit_Server(SpawnedUnit, ServerGateway);
 	
 	if (bSpawnAIController && !SpawnedUnit->GetController())
 		SpawnedUnit->SpawnDefaultController();
@@ -112,22 +154,59 @@ ASpUnit* USpawnSubsystem::SpawnUnit(USpUnitDefinition* UnitDefinition, const FTr
 	return SpawnedUnit;
 }
 
-void USpawnSubsystem::ActivateUnit(ASpUnit* Unit)
+ASpPlayerUnit* USpawnSubsystem::SpawnPlayerUnit(USpUnitDefinition* UnitDefinition, const FTransform& SpawnTransform, const FActorSpawnParameters& SpawnParameters, const FGenericTeamId& TeamId, const bool bActivateImmediately)
 {
+	if (!UnitDefinition || !UnitDefinition->UnitClass || !UnitDefinition->UnitClass->IsChildOf(ASpPlayerUnit::StaticClass()))
+		return nullptr;
+
 	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_Client)
+		return nullptr;
+
+	FActorSpawnParameters DeferredSpawnParameters = SpawnParameters;
+	DeferredSpawnParameters.bDeferConstruction = true;
+
+	ASpPlayerUnit* SpawnedUnit = World->SpawnActor<ASpPlayerUnit>(UnitDefinition->UnitClass, SpawnTransform, DeferredSpawnParameters);
+	if (!SpawnedUnit)
+		return nullptr;
+
+	USpUnitServerGatewayComponent* ServerGateway = SpawnedUnit->GetServerGateway();
+	if (!ServerGateway)
+		return nullptr;
+
+	ServerGateway->ApplyUnitData_Server(FSpUnitData(AllocateUnitUid(), UnitDefinition, TeamId.GetId()));
+	SpawnedUnit->FinishSpawning(SpawnTransform);
+
+	// 초기 Presentation 완료 전에는 표현을 활성화하지 않는다.
+	PrepareSpawnedUnit_Server(SpawnedUnit, ServerGateway);
+
+	if (bActivateImmediately)
+		ActivateUnit(SpawnedUnit);
+
+	return SpawnedUnit;
+}
+
+// sync
+
+void USpawnSubsystem::PrepareSpawnedUnit_Server(ASpUnit* SpawnedUnit, const USpUnitServerGatewayComponent* ServerGateway)
+{
+	check(SpawnedUnit);
+	check(ServerGateway);
 	
-	if (!Unit || !World || World->GetNetMode() == NM_Client)
-		return;
+	// Unit의 숨김, Tick, 충돌, 등록 상태는 Pool이 아닌 Unit 라이프사이클로 단일 관리
+	SpawnedUnit->SetUnitActive_Server(false, true);
+	SpawnedUnit->bAlwaysRelevant = true;
+	
+	ServerGateway->PrepareUnit_Server();
 
-	if (USpUnitServerGatewayComponent* ServerGateway = Unit->GetServerGateway())
-		ServerGateway->ActivateUnit_ServerOnly();
+	// Listen Server의 호스트는 자신의 UnitData를 네트워크 복제로 다시 수신하지 않음
+	if (GetWorld()->GetNetMode() == NM_ListenServer)
+	{
+		if (USpUnitClientGatewayComponent* ClientGateway = SpawnedUnit->GetClientGateway())
+			ClientGateway->ApplyUnitData_Client(SpawnedUnit->GetUnitData());
+	}
 
-	if (UActorPoolSubsystem* ActorPoolSubsystem = World->GetSubsystem<UActorPoolSubsystem>())
-		ActorPoolSubsystem->ActivateActor(Unit);
-
-	// 초기 복제가 끝났으므로 이후에는 원래 거리 기반 relevancy를 사용한다.
-	Unit->bAlwaysRelevant = false;
-	Unit->ForceNetUpdate();
+	SpawnedUnit->ForceNetUpdate();
 }
 
 // get
@@ -150,12 +229,7 @@ void USpawnSubsystem::GetSpreadLocation(const FSpawnGroupData& GroupData, TArray
 	if (!GroupData.UnitDefinition || !GroupData.UnitDefinition->UnitClass)
 		return;
 
-	const ASpUnit* UnitCDO = GroupData.UnitDefinition->UnitClass->GetDefaultObject<ASpUnit>();
-	if (!UnitCDO || !UnitCDO->GetCapsuleComponent())
-		return;
-
 	const FTransform Origin = GroupData.SpawnTransform;
-	const float HalfHeight = UnitCDO->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
 	for (uint8 i = 0; i < GroupData.Count; ++i)
 	{
@@ -165,9 +239,7 @@ void USpawnSubsystem::GetSpreadLocation(const FSpawnGroupData& GroupData, TArray
 		const FVector LocalOffset(FMath::Cos(Angle) * RandomLength, FMath::Sin(Angle) * RandomLength, 0.f);
 		const FVector WorldOffset = Origin.TransformVectorNoScale(LocalOffset);
 
-		FTransform Transform = Origin;
-		Transform.SetLocation(Origin.GetLocation() + WorldOffset + FVector(0.f, 0.f, HalfHeight));
-
+		FTransform Transform = FTransform(Origin.GetLocation() + WorldOffset);
 		SpawnTransforms.Add(Transform);
 	}
 }

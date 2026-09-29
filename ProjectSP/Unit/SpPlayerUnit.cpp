@@ -1,9 +1,8 @@
 #include "SpPlayerUnit.h"
-#include "Component/Player/SpUnitCameraComponent.h"
-#include "Component/Player/SpUnitInputComponent.h"
-#include "Component/Player/SpPlayerCommandComponent.h"
-#include "ProjectSP/Ability/SpAbilitySystemComponent.h"
-#include "ProjectSP/GameFramework/SpPlayerState.h"
+#include "Component/Player/SpPlayerCameraComponent.h"
+#include "Component/Player/SpPlayerInputComponent.h"
+#include "Component/Player/SpPlayerActionComponent.h"
+#include "ProjectSP/Ability/Core/SpAbilitySystemComponent.h"
 
 // ==================================================
 
@@ -12,69 +11,85 @@ ASpPlayerUnit::ASpPlayerUnit(const FObjectInitializer& ObjectInitializer)
 {
 	bFindCameraComponentWhenViewTarget = true;
 
-	CameraComponent = CreateDefaultSubobject<USpUnitCameraComponent>("SpUnitCameraComponent");
+	CameraComponent = CreateDefaultSubobject<USpPlayerCameraComponent>("SpPlayerCameraComponent");
 	CameraComponent->SetupAttachment(GetRootComponent());
 	CameraComponent->SetRelativeLocation(FVector(-300.0f, 0.0f, 75.0f));
 	CameraComponent->SetAutoActivate(true);
 
-	UnitInputComponent = CreateDefaultSubobject<USpUnitInputComponent>("SpUnitInputComponent");
-	PlayerCommandComponent = CreateDefaultSubobject<USpPlayerCommandComponent>("SpPlayerCommandComponent");
+	UnitInputComponent = CreateDefaultSubobject<USpPlayerInputComponent>("SpPlayerInputComponent");
+	PlayerActionComponent = CreateDefaultSubobject<USpPlayerActionComponent>("SpPlayerActionComponent");
+}
+
+void ASpPlayerUnit::BeginPlay()
+{
+	if (HasAuthority())
+		SpawnLocation = GetActorLocation();
+
+	Super::BeginPlay();
 }
 
 void ASpPlayerUnit::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
-	InitializeAbilitySystem();
-	TrySetInput();
+	
+	TrySetInput(true);
 }
 
 void ASpPlayerUnit::OnRep_Controller()
 {
 	Super::OnRep_Controller();
-	InitializeAbilitySystem();
-	TrySetInput();
+	TrySetInput(true);
 }
 
 void ASpPlayerUnit::OnRep_PlayerState()
 {
 	Super::OnRep_PlayerState();
-	InitializeAbilitySystem();
-	TrySetInput();
+	TrySetInput(true);
+}
+
+void ASpPlayerUnit::OnRep_UnitData()
+{
+	Super::OnRep_UnitData();
+	TrySetInput(false);
 }
 
 void ASpPlayerUnit::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
-	TrySetInput();
+	TrySetInput(false);
 }
 
-UAbilitySystemComponent* ASpPlayerUnit::GetAbilitySystemComponent() const
+void ASpPlayerUnit::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	return GetSpAbilitySystemComponent();
+	if (HasAuthority())
+		SetUnitActive_Server(false, true);
+
+	Super::EndPlay(EndPlayReason);
 }
 
-USpAbilitySystemComponent* ASpPlayerUnit::GetSpAbilitySystemComponent() const
+// protected
+
+void ASpPlayerUnit::HandleDeadProcessFinished_Server()
 {
-	if (const ASpPlayerState* SpPlayerState = GetPlayerState<ASpPlayerState>())
-		return SpPlayerState->GetSpAbilitySystemComponent();
+	check(HasAuthority());
 
-	return nullptr;
+	// 충돌과 표시를 복구하기 전에 최초 스폰 위치로 돌아간다.
+	SetActorLocation(SpawnLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	
+	if (AbilitySystemComponent)
+		AbilitySystemComponent->RestoreHp();
+	
+	SetUnitPlayable(true);
+	SetUnitPresentationVisible_Server(true);
 }
 
-void ASpPlayerUnit::InitializeAbilitySystem()
-{
-	if (ASpPlayerState* SpPlayerState = GetPlayerState<ASpPlayerState>())
-	{
-		// PlayerState가 Owner, 이 Pawn이 Avatar. 유닛 교체 시에도 플레이어 GAS 상태를 유지한다.
-		SpPlayerState->InitializeAbilitySystem(this);
-		RegisterUnitTagChangedEvent();
-	}
-}
-
-void ASpPlayerUnit::TrySetInput()
+void ASpPlayerUnit::TrySetInput(bool bInitUnit)
 {
 	if (!IsLocallyControlled() || !UnitInputComponent || !InputComponent)
 		return;
-
+	
+	if (bInitUnit)
+		InitUnit();
+	
 	UnitInputComponent->SetUp(InputComponent);
 }

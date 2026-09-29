@@ -19,7 +19,7 @@ protected:
 	UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadOnly, Category = "MJ - Runtime", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UBehaviorTree> BehaviorTree;
 
-	// Preparing 단계에서는 Behavior Tree를 시작하지 않기 위함
+	// Starting 단계에서는 Behavior Tree를 시작하지 않기 위함
 	bool bUnitGameplayActive = false;
 	
 public:
@@ -27,7 +27,7 @@ public:
 	
 protected:
 	virtual void OnPossess(APawn* InPawn) override;
-	virtual void OnUnitActive(bool bActive) override;
+	virtual void OnUnitPlayable(bool bPlayable) override;
 	virtual void Push() override;
 	
 	void TryStartBehaviorTree();

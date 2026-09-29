@@ -24,6 +24,9 @@ struct FSpUnitData
 	UPROPERTY(Transient, VisibleInstanceOnly, BlueprintReadWrite, Category = "MJ - Runtime")
 	uint8 TeamId = FGenericTeamId::NoTeam.GetId();
 
+	UPROPERTY(Transient, VisibleInstanceOnly, Category = "MJ - Runtime")
+	bool bRevealWhenPresentationReady = false;
+
 	// ------------------------------------------------
 	
 	FSpUnitData() = default;
@@ -45,5 +48,6 @@ struct FSpUnitData
 		UnitUid = InvalidUnitUid;
 		UnitDefinition = nullptr;
 		TeamId = FGenericTeamId::NoTeam.GetId();
+		bRevealWhenPresentationReady = false;
 	}
 };

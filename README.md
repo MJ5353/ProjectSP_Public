@@ -78,9 +78,7 @@ GAS와 Dedicated Server 기반의 **멀티플레이 액션 전투 프로토타�
 | --- | --- |
 | [스킬별 소개 영상](https://youtu.be/DyVocE9Bfh8) | 스킬 동작 시연 |
 | [2인 멀티플레이 영상](https://youtu.be/-AFjZgM8bhY) | 두 플레이어가 참여하는 멀티플레이 시연 |
-| [상세 포트폴리오 — Notion](https://app.notion.com/p/9a0c1666cc8a82da9fb8818fc9ae576b) | 설계 의도, 주요 구현 및 1차 마감 성과 |
 | [빌드 파일 — Google Drive](https://drive.google.com/drive/u/2/folders/1mbZqjwGV8Nk7oH49FeP-MFNfSVCtYjOv) | 프로젝트 빌드 파일 |
-| [GitHub 저장소](https://github.com/MJ5353/ProjectSP_Public) | 공개 소스 코드 |
 
 ## 한계와 향후 계획
 
